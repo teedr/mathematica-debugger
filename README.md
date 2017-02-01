@@ -1,6 +1,6 @@
 # mathematica-debugger
 
-This package provides an implementation of a debugger for Wolfram's Mathematica.
+This package provides an implementation of a debugger for Wolfram's _Mathematica_.
 
 ## Installation
 
@@ -15,7 +15,7 @@ This package provides an implementation of a debugger for Wolfram's Mathematica.
 	$ ln -s /path/to/mathematica-debugger/Debugger .
 	```
 	
-3. Use ``Get["Debugger`"]`` or ``Needs["Debugger`"]`` to load the package
+3. Use ``Get["Debugger`"]`` or ``Needs["Debugger`"]`` to load the package in _Mathematica_
 
 ## Usage
 
@@ -33,8 +33,10 @@ This package provides an implementation of a debugger for Wolfram's Mathematica.
 		
 
 * Populate the _IgnoreContexts_ option with a list of context names to ignore variables in specific contexts
+	> Defaults to `IgnoreContexts -> {"System"}`
 
 * Use the _AbortOnMessage_ option to stop evaluation upon the first message thrown
+	> Defaults to `AbortOnMessage -> True`
 
 ## Examples
 
