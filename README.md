@@ -120,7 +120,8 @@ Out[2]= Association[
 ## Contributing
 
 Please! Fork this repository and open a pull request. Some potential future developments include:
-	* Log SetDelayed calls / Log function calls
-	* Log what function was responsible for an assignment
-	* Figure out how to interrogate ``DebuggerInformation`` such that you don't have to know the ``$ModuleNumber``
-	* More stuff I can't think of
+
+* Log SetDelayed calls / Log function calls
+* Log what function was responsible for an assignment
+* Figure out how to interrogate ``DebuggerInformation`` such that you don't have to know the ``$ModuleNumber``
+* More stuff I can't think of
