@@ -1,11 +1,21 @@
 # mathematica-debugger
 
-This package provides an implementation of a debugger for Wolfram's Mathematica.
+This package provides an implementation of a debugger for Wolfram's _Mathematica_.
 
 ## Installation
 
-1. Link or move the _Debugger_ folder to a folder listed in `$Path`
-2. Use ``Get["Debugger`"]`` or ``Needs["Debugger`"]`` to load the package
+1. Clone repo
+	```sh
+	$ git clone git@github.com:teedr/mathematica-debugger.git
+	```
+
+2. Link or move the _Debugger_ folder to a folder listed in `$Path`
+	```
+	$ cd <Some dir listed in your Mathematica $Path>
+	$ ln -s /path/to/mathematica-debugger/Debugger .
+	```
+	
+3. Use ``Get["Debugger`"]`` or ``Needs["Debugger`"]`` to load the package in _Mathematica_
 
 ## Usage
 
@@ -23,12 +33,14 @@ This package provides an implementation of a debugger for Wolfram's Mathematica.
 		
 
 * Populate the _IgnoreContexts_ option with a list of context names to ignore variables in specific contexts
+	> Defaults to `IgnoreContexts -> {"System"}`
 
 * Use the _AbortOnMessage_ option to stop evaluation upon the first message thrown
+	> Defaults to `AbortOnMessage -> True`
 
 ## Examples
 
-##### Without messages
+### Without messages
 Example function definition:
 ```
 func[x_Integer]:=Module[
@@ -66,7 +78,7 @@ Out[2]= Association[
 ]
 ```
 
-##### With messages
+### With messages
 Example function definition:
 ```
 func::err:="Error!";
@@ -120,7 +132,10 @@ Out[2]= Association[
 ## Contributing
 
 Please! Fork this repository and open a pull request. Some potential future developments include:
-	* Log SetDelayed calls / Log function calls
-	* Log what function was responsible for an assignment
-	* Figure out how to interrogate ``DebuggerInformation`` such that you don't have to know the ``$ModuleNumber``
-	* More stuff I can't think of
+
+* Log SetDelayed calls / Log function calls
+* Log what function was responsible for an assignment
+* Figure out how to interrogate ``DebuggerInformation`` such that you don't have to know the ``$ModuleNumber``
+* Figure out some way to have breakpoints like the `Assert[False]` trick in the _Mathematica_ debugger
+* Perhaps some sort of Debugger dialog
+* More stuff I can't think of
