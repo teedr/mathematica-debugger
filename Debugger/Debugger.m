@@ -2,13 +2,13 @@ BeginPackage["Debugger`"];
 Needs["GeneralUtilities`"];
 
 Debugger;
-DebugInformation;
+DebuggerInformation;
 IgnoreContexts;
 AbortOnMessage;
 
 Begin["`Private`"];
 
-ClearAll[DebugInformation];
+ClearAll[DebuggerInformation];
 
 Options[Debugger]:={
 	IgnoreContexts -> {"System"},
@@ -17,7 +17,7 @@ Options[Debugger]:={
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	{return,currentAssignments},
 	
-	ClearAll[DebugInformation];
+	ClearAll[DebuggerInformation];
 	
 	(* $$ prefix indicates that setting this variable should not trigger SetHandler *)
 	$$assignments = Association[];
@@ -49,7 +49,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 		$$assignments
 	];
 	
-	DebugInformation = Association[
+	DebuggerInformation = Association[
 		"AssignmentLog" -> $$assignments,
 		"CurrentAssignments" -> currentAssignments,
 		"LastAssignment" -> $$lastAssignment,
