@@ -40,7 +40,7 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 
 ## Examples
 
-##### Without messages
+### Without messages
 Example function definition:
 ```
 func[x_Integer]:=Module[
@@ -78,7 +78,7 @@ Out[2]= Association[
 ]
 ```
 
-##### With messages
+### With messages
 Example function definition:
 ```
 func::err:="Error!";
