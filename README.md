@@ -25,3 +25,7 @@ This package provides an implementation of a debugger for Wolfram's Mathematica.
 * Populate the _IgnoreContexts_ option with a list of context names to ignore variables in specific contexts
 
 * Use the _AbortOnMessage_ option to stop evaluation upon the first message thrown
+
+## Contributing
+
+Please fork this repository and open a pull request. Future development plan to be added soon.
