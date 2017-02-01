@@ -5,7 +5,7 @@ This package provides an implementation of a debugger for Wolfram's Mathematica.
 ## Installation
 
 1. Link or move the _Debugger_ folder to a folder listed in `$Path`
-2. Use `Get["Debugger`"]` or `Needs["Debugger`"]` to load package
+2. Use ``Get["Debugger`"]`` or ``Needs["Debugger`"]`` to load the package
 
 ## Usage
 
