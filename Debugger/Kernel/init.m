@@ -1,5 +1,4 @@
 (* ::Package:: *)
 
-(* initialization file for the package Audio` *)
-
+(* initialization file for the package Debugger` *)
 Get["Debugger`Debugger`"]
