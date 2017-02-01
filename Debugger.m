@@ -3,6 +3,8 @@ Needs["GeneralUtilities`"];
 
 Debugger;
 DebugInformation;
+IgnoreContexts;
+AbortOnMessage;
 
 Begin["`Private`"];
 
