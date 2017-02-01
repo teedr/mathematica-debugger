@@ -136,4 +136,6 @@ Please! Fork this repository and open a pull request. Some potential future deve
 * Log SetDelayed calls / Log function calls
 * Log what function was responsible for an assignment
 * Figure out how to interrogate ``DebuggerInformation`` such that you don't have to know the ``$ModuleNumber``
+* Figure out some way to have breakpoints like the `Assert[False]` trick in the _Mathematica_ debugger
+* Perhaps some sort of Debugger dialog
 * More stuff I can't think of
