@@ -31,6 +31,9 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 	* _"Failures"_
 		* A list of any messages represented by `Failure` objects
 
+
+* All variables in _DebuggerInformation_ Associations will be ToString-ed and include Context and any `$ModuleNumber` suffix
+
 ### Options 
 
 * Populate the `DebuggerContexts` option with a list of contexts from which variables should be tracked
