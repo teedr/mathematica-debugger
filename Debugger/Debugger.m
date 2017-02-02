@@ -73,7 +73,7 @@ SetAttributes[Debugger,HoldFirst];
 populateDebuggerInformation[]:=With[
 	{
 		currentAssignments = Map[
-			Last,
+			SafeLast,
 			$$assignments
 		]
 	},
@@ -104,9 +104,10 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],OptionsPatter
 	{
 		$$currentAssignments = Lookup[
 			$$assignments,
-			HoldForm[$$variable],
+			ToString[HoldForm[$$variable]],
 			{}
-		]
+		],
+		$$symbolString = ToString[HoldForm[$$variable]]
 	},
 	If[
 		MatchQ[
@@ -118,12 +119,12 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],OptionsPatter
 		],
 		AppendTo[
 			$$assignments,
-			HoldForm[$$variable] -> Append[
+			$$symbolString -> Append[
 				$$currentAssignments,
 				$$value
 			]
 		];
-		$$lastAssignment = HoldForm[$$variable]
+		$$lastAssignment = $$symbolString
 	]
 ];
 
