@@ -3,19 +3,23 @@ Needs["GeneralUtilities`"];
 
 Debugger;
 DebuggerInformation;
-IgnoreContexts;
+DebuggerContexts;
 AbortOnMessage;
+BreakOnAssert;
+
+$DebuggerContexts = {"Global"};
 
 Begin["`Private`"];
 
 ClearAll[DebuggerInformation];
 
 Options[Debugger]:={
-	IgnoreContexts -> {"System"},
-	AbortOnMessage -> True
+	DebuggerContexts :> $DebuggerContexts,
+	AbortOnMessage -> True,
+	BreakOnAssert -> False
 };
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
-	{return,currentAssignments},
+	{return},
 	
 	ClearAll[DebuggerInformation];
 	
@@ -26,35 +30,31 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	
 	return = With[
 		{
-			ignoreContexts = OptionValue[IgnoreContexts],
+			contexts = OptionValue[DebuggerContexts],
 			abortOnMessage = OptionValue[AbortOnMessage]
 		},
-		WithMessageHandler[
-			WithSetHandler[
-				codeBlock,
-				setHandler[
+		Block[
+			{$AssertFunction},
+			If[TrueQ[OptionValue[BreakOnAssert]],
+				$AssertFunction = assertHandler
+			];
+			WithMessageHandler[
+				WithSetHandler[
+					codeBlock,
+					setHandler[
+						##,
+						DebuggerContexts -> contexts
+					]&
+				],
+				messageHandler[
 					##,
-					IgnoreContexts -> ignoreContexts
+					AbortOnMessage -> abortOnMessage
 				]&
-			],
-			messageHandler[
-				##,
-				AbortOnMessage -> abortOnMessage
-			]&
+			]
 		]
 	];
 	
-	currentAssignments = Map[
-		Last,
-		$$assignments
-	];
-	
-	DebuggerInformation = Association[
-		"AssignmentLog" -> $$assignments,
-		"CurrentAssignments" -> currentAssignments,
-		"LastAssignment" -> $$lastAssignment,
-		"Failures" -> $$messages
-	];
+	populateDebuggerInformation[];
 	
 	If[MatchQ[return,$Aborted[]],
 		Message/@$$messages
@@ -70,8 +70,23 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 ];
 SetAttributes[Debugger,HoldFirst];
 
+populateDebuggerInformation[]:=With[
+	{
+		currentAssignments = Map[
+			Last,
+			$$assignments
+		]
+	},
+	DebuggerInformation = Association[
+		"AssignmentLog" -> $$assignments,
+		"CurrentAssignments" -> currentAssignments,
+		"LastAssignment" -> $$lastAssignment,
+		"Failures" -> $$messages
+	]
+];
+
 Options[setHandler]:={
-	IgnoreContexts -> {}
+	DebuggerContexts -> {}
 };
 setHandler[heldVars:HoldComplete[_List], values:HoldComplete[_],ops:OptionsPattern[]]:=With[
 	{},
@@ -96,11 +111,9 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],OptionsPatter
 	If[
 		MatchQ[
 			First[StringSplit[Context[$$variable],"`"]],
-			Except[
-				Apply[
-					Alternatives,
-					OptionValue[IgnoreContexts]
-				]
+			Apply[
+				Alternatives,
+				OptionValue[DebuggerContexts]
 			]
 		],
 		AppendTo[
@@ -127,9 +140,31 @@ messageHandler[failure_,OptionsPattern[]]:=With[
 	];
 ];
 
+assertHandler[HoldComplete[Assert[_,assertionLocation_List]]]:=With[
+	{},
+	
+	PrintTemporary[
+		StringJoin[
+			"Breakpoint at ",
+			"line: ",
+			ToString[First[assertionLocation]],
+			" file: ",
+			Last[assertionLocation]
+		]
+	];
+	
+	populateDebuggerInformation[];	
+	Interrupt[];
+];
+assertHandler[Assert[HoldComplete[___]]]:=With[
+	{},
+	PrintTemporary["Breakpoint at unknown location"];
+	populateDebuggerInformation[];
+	Interrupt[];
+];
+
 (* ::Section::Closed:: *)
 (*End Package*)
-
 
 End[];
 EndPackage[];
