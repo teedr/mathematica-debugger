@@ -5,14 +5,14 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 ## Installation
 
 1. Clone repo
-	```sh
+	```
 	$ git clone git@github.com:teedr/mathematica-debugger.git
 	```
 
 2. Link or move the _Debugger_ folder to a folder listed in `$Path`
 	```
 	$ cd <Some dir listed in your Mathematica $Path>
-	$ ln -s /path/to/mathematica-debugger/Debugger .
+	$ ln -s <path to where you cloned mathematica-debugger>/mathematica-debugger/Debugger .
 	```
 	
 3. Use ``Get["Debugger`"]`` or ``Needs["Debugger`"]`` to load the package in _Mathematica_
