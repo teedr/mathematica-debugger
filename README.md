@@ -10,9 +10,17 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 	```
 
 2. Link or move the _Debugger_ folder to a folder listed in your _Mathematica_ `$Path`
+
+	_Mac:_
 	```
 	$ cd <Some dir listed in your Mathematica $Path>
 	$ ln -s <path to where you cloned mathematica-debugger>/mathematica-debugger/Debugger .
+	```
+	
+	_Windows:_ Open cmd.exe *as administrator* (Open Start menu, search for cmd.exe, right click, select "Run as administrator")
+	```
+	$ cd <Some dir listed in your Mathematica $Path>
+	$ mklink /D . <path to where you cloned mathematica-debugger>\mathematica-debugger\Debugger
 	```
 	
 3. Use ``Get["Debugger`"]`` or ``Needs["Debugger`"]`` to load the package in _Mathematica_
