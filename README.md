@@ -10,9 +10,17 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 	```
 
 2. Link or move the _Debugger_ folder to a folder listed in your _Mathematica_ `$Path`
+
+	_Mac:_
 	```
 	$ cd <Some dir listed in your Mathematica $Path>
 	$ ln -s <path to where you cloned mathematica-debugger>/mathematica-debugger/Debugger .
+	```
+	
+	_Windows:_ Open cmd.exe *as administrator* (Open Start menu, search for cmd.exe, right click, select "Run as administrator")
+	```
+	$ cd <Some dir listed in your Mathematica $Path>
+	$ mklink /D . <path to where you cloned mathematica-debugger>\mathematica-debugger\Debugger
 	```
 	
 3. Use ``Get["Debugger`"]`` or ``Needs["Debugger`"]`` to load the package in _Mathematica_
@@ -38,8 +46,10 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 
 * Populate the `DebuggerContexts` option with a list of contexts from which variables should be tracked
 	> Defaults to `DebuggerContexts -> $DebuggerContexts` (which is set by default to `{"Global"}`)
+	
 * Use the `AbortOnMessage` option to stop evaluation upon the first message thrown
 	> Defaults to `AbortOnMessage -> True`
+	
 * Use the `BreakOnAssert` option to interrupt evaluation on failed assertions (ie: `Assert[False]` can be used like a breakpoint)
 	> Defaults to `BreakOnAssert -> False`
 
@@ -47,7 +57,7 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 
 * When `BreakOnAssert` is `True`, the Interrupt dialog is displayed upon execution of `Assert[False]`
 * Click _Abort_ in the Interrupt dialog to kill the evaluation
-* Click _Enter Subsession_ in Interrupt dialog to free the kernel for evaluations	
+* Click _Enter Subsession_ in Interrupt dialog to free the kernel for evaluations
 	* This allows `DebuggerInformation` to be queried mid-evaluation
 * Once the dialog is dismissed, evaluation must be controlled by the Debugger Controls
 	* CTRL + Shift + H: Halt
