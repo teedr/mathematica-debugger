@@ -39,12 +39,19 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 				$AssertFunction = assertHandler
 			];
 			WithMessageHandler[
-				WithSetHandler[
-					codeBlock,
-					setHandler[
-						##,
-						DebuggerContexts -> contexts
-					]&
+				(* If a message is Quieted, it wont be sent to the message handler
+					However, if the message is called many times and triggers the 
+					General::stop message, General::stop is passed to the handler
+					Quiet General::stop as a hacky way to handle this *)
+				Quiet[
+					WithSetHandler[
+						codeBlock,
+						setHandler[
+							##,
+							DebuggerContexts -> contexts
+						]&
+					],
+					{General::stop}
 				],
 				messageHandler[
 					##,
