@@ -6,6 +6,7 @@ DebuggerInformation;
 DebuggerContexts;
 AbortOnMessage;
 BreakOnAssert;
+ModuleNumbers;
 
 $DebuggerContexts = {"Global"};
 
@@ -16,7 +17,8 @@ ClearAll[DebuggerInformation];
 Options[Debugger]:={
 	DebuggerContexts :> $DebuggerContexts,
 	AbortOnMessage -> True,
-	BreakOnAssert -> False
+	BreakOnAssert -> False,
+	ModuleNumbers -> False
 };
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	{return},
@@ -31,7 +33,8 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	return = With[
 		{
 			contexts = OptionValue[DebuggerContexts],
-			abortOnMessage = OptionValue[AbortOnMessage]
+			abortOnMessage = OptionValue[AbortOnMessage],
+			moduleNumbers = OptionValue[ModuleNumbers]
 		},
 		Block[
 			{$AssertFunction},
@@ -43,7 +46,8 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 					codeBlock,
 					setHandler[
 						##,
-						DebuggerContexts -> contexts
+						DebuggerContexts -> contexts,
+						ModuleNumbers -> moduleNumbers
 					]&
 				],
 				messageHandler[
@@ -86,7 +90,8 @@ populateDebuggerInformation[]:=With[
 ];
 
 Options[setHandler]:={
-	DebuggerContexts -> {}
+	DebuggerContexts -> {},
+	ModuleNumbers -> False
 };
 setHandler[heldVars:HoldComplete[_List], values:HoldComplete[_],ops:OptionsPattern[]]:=With[
 	{},
@@ -100,15 +105,23 @@ setHandler[heldVars:HoldComplete[_List], values:HoldComplete[_],ops:OptionsPatte
 		]
 	]
 ];
-setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],OptionsPattern[]]:=With[
-	{
-		$$currentAssignments = Lookup[
-			$$assignments,
+setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPattern[]]:=Module[
+	{$$symbolString,$$currentAssignments},
+
+	$$symbolString = If[TrueQ[OptionValue[ModuleNumbers]],
+		ToString[HoldForm[$$variable]],
+		StringReplace[
 			ToString[HoldForm[$$variable]],
-			{}
-		],
-		$$symbolString = ToString[HoldForm[$$variable]]
-	},
+			RegularExpression["\\$[0-9]+"] -> ""
+		]
+	];
+
+	$$currentAssignments = Lookup[
+		$$assignments,
+		$$symbolString,
+		{}
+	];
+	
 	If[
 		MatchQ[
 			First[StringSplit[Context[$$variable],"`"]],
