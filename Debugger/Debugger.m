@@ -7,7 +7,7 @@ DebuggerContexts;
 AbortOnMessage;
 BreakOnAssert;
 
-$DebuggerContexts = {"Global"};
+$DebuggerContexts = {"Global`"};
 
 Begin["`Private`"];
 
@@ -117,8 +117,8 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],OptionsPatter
 		$$symbolString = ToString[HoldForm[$$variable]]
 	},
 	If[
-		MatchQ[
-			First[StringSplit[Context[$$variable],"`"]],
+		StringMatchQ[
+			Context[$$variable],
 			Apply[
 				Alternatives,
 				OptionValue[DebuggerContexts]
