@@ -31,7 +31,7 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 
 * After execution, the symbol `DebuggerInformation` will be populated with keys: 
 	* _"AssignmentLog"_
-		* Association mapping each assigned variable to a list of all values throughout the execution of the code block)
+		* List of timestamped assignments (in order of assignment) for each variable assigned during execution
 	* _"CurrentAssignments"_
 		* Association mapping each assigned variable to its current value
 	* _"LastAssignment"_
@@ -44,14 +44,17 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 
 ### Options 
 
-* Populate the `DebuggerContexts` option with a list of contexts from which variables should be tracked
-	> Defaults to `DebuggerContexts -> $DebuggerContexts` (which is set by default to `{"Global"}`)
+* Populate the `DebuggerContexts` option with a list of context string expressions from which variables should be tracked
+	> Defaults to `DebuggerContexts -> $DebuggerContexts` (which is set by default to `{"Global`\*"}`)
 	
 * Use the `AbortOnMessage` option to stop evaluation upon the first message thrown
 	> Defaults to `AbortOnMessage -> True`
 	
 * Use the `BreakOnAssert` option to interrupt evaluation on failed assertions (ie: `Assert[False]` can be used like a breakpoint)
 	> Defaults to `BreakOnAssert -> False`
+	
+* Use the `ModuleNumbers` option to toggle module number suffix on variable names
+	> Defaults to `ModuleNumbers -> False`
 
 ### Breakpoints
 
@@ -90,16 +93,20 @@ Query `DebuggerInformation` to see variable set history
 In[2]:= DebuggerInformation
 
 Out[2]= Association[
-	"AssignmentLog" -> Association[
+	"AssignmentLog" -> {
 		(* foo had multiple assignments *)
-		foo$576 -> {3,7},
-		bar$576 -> {4}
-	],
+		{1487198514, foo, 3},
+		{1487198515, bar, 4},
+		{1487198516, foo, 7}
+	},
 	"CurrentAssignments" -> Association[
-		foo$576 -> 7,
-		bar$576 -> 4
+		foo -> 7,
+		bar -> 4
 	],
-	"LastAssignment" -> foo$576,
+	"LastAssignment" -> Rule[
+		foo,
+		7
+	],
 	"Failures" -> {}
 ]
 ```
@@ -123,7 +130,7 @@ func[x_Integer]:=Module[
 ```
 Use Debugger in function execution
 ```
-In[1]:= Debugger[func[3]]
+In[1]:= Debugger[func[3],ModuleNumbers->True]
 	func:Error!
 
 Out[1]= $Aborted[]
@@ -133,16 +140,19 @@ Query `DebuggerInformation` to see variable set history
 In[2]:= DebuggerInformation
 
 Out[2]= Association[
-	"AssignmentLog" -> Association[
+	"AssignmentLog" -> {
 		(* execution aborted before foo's second assignment *)
-		foo$577 -> {3},
-		bar$577 -> {4}
-	],
+		{1487198514, foo$577, 3},
+		{1487198514, bar$577, 4}
+	},
 	"CurrentAssignments" -> Association[
 		foo$577 -> 3,
 		bar$577 -> 4
 	],
-	"LastAssignment" -> bar$577,
+	"LastAssignment" -> Rule[
+		bar$577,
+		4
+	],
 	"Failures" -> {
 		Failure[
 			func,
@@ -175,7 +185,7 @@ func[x_Integer]:=Module[
 ```
 Use Debugger in function execution
 ```
-In[1]:= Debugger[func[3], BreakOnAssert -> True]
+In[1]:= Debugger[func[3], BreakOnAssert -> True, ModuleNumbers -> True]
 	"Breakpoint at line: 3 of file: README.md"
 
 ```
@@ -184,11 +194,11 @@ Select _Enter Subsession_ in Interrupt dialog and query `DebuggerInformation` to
 (Dialog) In[2]:= DebuggerInformation
 
 (Dialog) Out[2]= Association[
-	"AssignmentLog" -> Association[
+	"AssignmentLog" -> {
 		(* execution paused before foo's second assignment *)
-		foo$577 -> {3},
-		bar$577 -> {4}
-	],
+		{1487198514, foo$577, 3},
+		{1487198514, bar$577, 4}
+	},
 	"CurrentAssignments" -> Association[
 		foo$577 -> 3,
 		bar$577 -> 4
@@ -210,7 +220,6 @@ Please! Fork this repository and open a pull request. Some potential future deve
 
 * Log SetDelayed calls / Log function calls
 * Log what function was responsible for an assignment
-* Figure out how to query ``DebuggerInformation`` such that you don't have to know the ``$ModuleNumber``
-* Figure out some way to hide `Assert[False]` behind a `Breakpoint` symbol
+* Figure out some way to populate `DebuggerInformation` upon `Assert[False]` without compromising Reap/Sow performance
 * Perhaps some sort of Debugger dialog
 * More stuff I can't think of
