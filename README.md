@@ -44,17 +44,14 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 
 ### Options 
 
-* `DebuggerContexts` a list of contexts from which variables should be tracked
+* Populate the `DebuggerContexts` option with a list of contexts from which variables should be tracked
 	> Defaults to `DebuggerContexts -> $DebuggerContexts` (which is set by default to `{"Global"}`)
 	
-* `AbortOnMessage` stops evaluation upon the first message thrown when `True`
+* Use the `AbortOnMessage` option to stop evaluation upon the first message thrown
 	> Defaults to `AbortOnMessage -> True`
 	
-* `BreakOnAssert` interrupts evaluation on failed assertions (ie: `Assert[False]` can be used like a breakpoint) when `True`
+* Use the `BreakOnAssert` option to interrupt evaluation on failed assertions (ie: `Assert[False]` can be used like a breakpoint)
 	> Defaults to `BreakOnAssert -> False`
-	
-* `ModuleNumbers` includes ModuleNumbers (foo$1243) in tracked variable names when `True`
-	> Defaults to `ModuleNumbers -> False`
 
 ### Breakpoints
 

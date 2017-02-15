@@ -8,7 +8,7 @@ AbortOnMessage;
 BreakOnAssert;
 ModuleNumbers;
 
-$DebuggerContexts = {"Global`"};
+$DebuggerContexts = {"Global`*"};
 
 Begin["`Private`"];
 
