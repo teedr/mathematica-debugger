@@ -15,84 +15,103 @@ Begin["`Private`"];
 ClearAll[DebuggerInformation];
 
 Options[Debugger]:={
-	DebuggerContexts :> $DebuggerContexts,
+	DebuggerContexts -> $DebuggerContexts,
 	AbortOnMessage -> True,
 	BreakOnAssert -> False,
 	ModuleNumbers -> False
 };
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
-	{return},
+	{reapReturn,return,sowedAssignments,sowedMessages},
 	
 	ClearAll[DebuggerInformation];
 	
-	(* $$ prefix indicates that setting this variable should not trigger SetHandler *)
-	$$assignments = Association[];
-	$$messages = {};
-	$$lastAssignment = Null;
-	
-	return = With[
-		{
-			contexts = OptionValue[DebuggerContexts],
-			abortOnMessage = OptionValue[AbortOnMessage],
-			moduleNumbers = OptionValue[ModuleNumbers]
-		},
-		Block[
-			{$AssertFunction},
-			If[TrueQ[OptionValue[BreakOnAssert]],
-				$AssertFunction = assertHandler
-			];
-			WithMessageHandler[
-				(* If a message is Quieted, it wont be sent to the message handler
-					However, if the message is called many times and triggers the 
-					General::stop message, General::stop is passed to the handler
-					Quiet General::stop as a hacky way to handle this *)
-				Quiet[
-					WithSetHandler[
-						codeBlock,
-						setHandler[
-							##,
-							DebuggerContexts -> contexts,
-							ModuleNumbers -> moduleNumbers
-						]&
+	(* Use Reap/Sow to optimize AssignmentLog appending *)
+	reapReturn = Reap[
+		With[
+			{
+				contexts = OptionValue[DebuggerContexts],
+				abortOnMessage = OptionValue[AbortOnMessage],
+				moduleNumbers = OptionValue[ModuleNumbers]
+			},
+			Block[
+				{$AssertFunction},
+				If[TrueQ[OptionValue[BreakOnAssert]],
+					$AssertFunction = assertHandler
+				];
+				WithMessageHandler[
+					(* If a message is Quieted, it wont be sent to the message handler
+						However, if the message is called many times and triggers the 
+						General::stop message, General::stop is passed to the handler
+						Quiet General::stop as a hacky way to handle this *)
+					Quiet[
+						WithSetHandler[
+							codeBlock,
+							setHandler[
+								##,
+								DebuggerContexts -> contexts,
+								ModuleNumbers -> moduleNumbers
+							]&
+						],
+						{General::stop}
 					],
-					{General::stop}
-				],
-				messageHandler[
-					##,
-					AbortOnMessage -> abortOnMessage
-				]&
+					messageHandler[
+						##,
+						AbortOnMessage -> abortOnMessage
+					]&
+				]
 			]
-		]
+		],
+		_,
+		Rule
+	];
+Global`rep=reapReturn[[2]];
+	return = reapReturn[[1]];
+	sowedAssignments = Lookup[
+		reapReturn[[2]],
+		"assignment",
+		{}
+	];
+	sowedMessages = Lookup[
+		reapReturn[[2]],
+		"failure",
+		{}
 	];
 	
-	populateDebuggerInformation[];
+	populateDebuggerInformation[sowedAssignments,sowedMessages];
 	
 	If[MatchQ[return,$Aborted[]],
-		Message/@$$messages
-	];
-	
-	ClearAll[
-		$$assignments,
-		$$messages,
-		$$lastAssignment
+		Message/@sowedMessages
 	];
 	
 	return
 ];
 SetAttributes[Debugger,HoldFirst];
 
-populateDebuggerInformation[]:=With[
+populateDebuggerInformation[assignments_List,failures_List]:=With[
 	{
-		currentAssignments = Map[
-			SafeLast,
-			$$assignments
+		currentAssignments = Association[
+			Map[
+				Function[
+					variableName,
+					variableName -> SelectFirst[
+						Reverse[assignments],
+						MatchQ[#[[2]],variableName]&,
+						{Null,Null,Null}
+					][[3]]
+				],
+				DeleteDuplicates[assignments[[All,2]]]
+			]
+		],
+		lastAssignment = Apply[
+			Rule,
+			SafeLast[assignments][[{2,3}]]
 		]
 	},
 	DebuggerInformation = Association[
-		"AssignmentLog" -> $$assignments,
+		"AssignmentLog" -> assignments,
 		"CurrentAssignments" -> currentAssignments,
-		"LastAssignment" -> $$lastAssignment,
-		"Failures" -> $$messages
+		"LastAssignment" -> lastAssignment,
+		"Failures" -> failures
 	]
 ];
 
@@ -113,7 +132,7 @@ setHandler[heldVars:HoldComplete[_List], values:HoldComplete[_],ops:OptionsPatte
 	]
 ];
 setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPattern[]]:=Module[
-	{$$symbolString,$$currentAssignments},
+	{$$symbolString},
 
 	$$symbolString = If[TrueQ[OptionValue[ModuleNumbers]],
 		ToString[HoldForm[$$variable]],
@@ -121,12 +140,6 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPa
 			ToString[HoldForm[$$variable]],
 			RegularExpression["\\$[0-9]+"] -> ""
 		]
-	];
-
-	$$currentAssignments = Lookup[
-		$$assignments,
-		$$symbolString,
-		{}
 	];
 	
 	If[
@@ -137,14 +150,7 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPa
 				OptionValue[DebuggerContexts]
 			]
 		],
-		AppendTo[
-			$$assignments,
-			$$symbolString -> Append[
-				$$currentAssignments,
-				$$value
-			]
-		];
-		$$lastAssignment = $$symbolString
+		Sow[{UnixTime[],$$symbolString,$$value},"assignment"]
 	]
 ];
 
@@ -154,7 +160,7 @@ Options[messageHandler]:={
 messageHandler[failure_,OptionsPattern[]]:=With[
 	{},
 	
-	AppendTo[$$messages,failure];
+	Sow[failure,"failure"];
 	
 	If[TrueQ[OptionValue[AbortOnMessage]],
 		Abort[]
@@ -174,13 +180,12 @@ assertHandler[HoldComplete[Assert[_,assertionLocation_List]]]:=With[
 		]
 	];
 	
-	populateDebuggerInformation[];	
 	Interrupt[];
 ];
 assertHandler[Assert[HoldComplete[___]]]:=With[
 	{},
 	PrintTemporary["Breakpoint at unknown location"];
-	populateDebuggerInformation[];
+	
 	Interrupt[];
 ];
 
