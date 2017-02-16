@@ -8,7 +8,7 @@ AbortOnMessage;
 BreakOnAssert;
 ModuleNumbers;
 
-$DebuggerContexts = {"Global`*"};
+$DebuggerContexts = "Global`*";
 
 Begin["`Private`"];
 
@@ -104,7 +104,7 @@ populateDebuggerInformation[assignments_List,failures_List]:=With[
 		],
 		lastAssignment = Apply[
 			Rule,
-			SafeLast[assignments][[{2,3}]]
+			SafeLast[assignments,{Null,Null,Null}][[{2,3}]]
 		]
 	},
 	DebuggerInformation = Association[
