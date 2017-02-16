@@ -8,7 +8,7 @@ AbortOnMessage;
 BreakOnAssert;
 ModuleNumbers;
 
-$DebuggerContexts = "Global`*";
+$DebuggerContexts = {"Global`"};
 
 Begin["`Private`"];
 
@@ -29,7 +29,16 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	reapReturn = Reap[
 		With[
 			{
-				contexts = OptionValue[DebuggerContexts],
+				contextsRegex = Apply[
+					Alternatives,
+					StringRiffle[
+						Map[
+							StringJoin[#,".*"]&,
+							OptionValue[DebuggerContexts]
+						],
+						"|"
+					]
+				],
 				abortOnMessage = OptionValue[AbortOnMessage],
 				moduleNumbers = OptionValue[ModuleNumbers]
 			},
@@ -48,7 +57,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 							codeBlock,
 							setHandler[
 								##,
-								DebuggerContexts -> contexts,
+								ContextsRegex -> contextsRegex,
 								ModuleNumbers -> moduleNumbers
 							]&
 						],
@@ -64,7 +73,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 		_,
 		Rule
 	];
-Global`rep=reapReturn[[2]];
+
 	return = reapReturn[[1]];
 	sowedAssignments = Lookup[
 		reapReturn[[2]],
@@ -116,7 +125,7 @@ populateDebuggerInformation[assignments_List,failures_List]:=With[
 ];
 
 Options[setHandler]:={
-	DebuggerContexts -> {},
+	ContextsRegex -> "*",
 	ModuleNumbers -> False
 };
 setHandler[heldVars:HoldComplete[_List], values:HoldComplete[_],ops:OptionsPattern[]]:=With[
@@ -145,10 +154,7 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPa
 	If[
 		StringMatchQ[
 			Context[$$variable],
-			Apply[
-				Alternatives,
-				OptionValue[DebuggerContexts]
-			]
+			RegularExpression[OptionValue[ContextsRegex]]
 		],
 		Sow[{UnixTime[],$$symbolString,$$value},"assignment"]
 	]
