@@ -111,9 +111,13 @@ populateDebuggerInformation[assignments_List,failures_List]:=With[
 				DeleteDuplicates[assignments[[All,2]]]
 			]
 		],
-		lastAssignment = Apply[
-			Rule,
-			SafeLast[assignments,{Null,Null,Null}][[{2,3}]]
+		lastAssignment = If[
+			Length[assignments] === 0,
+			Null,
+			Apply[
+				Rule,
+				SafeLast[assignments,{Null,Null,Null}][[{2,3}]]
+			]
 		]
 	},
 	DebuggerInformation = Association[
