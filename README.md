@@ -40,12 +40,12 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 		* A list of any messages represented by `Failure` objects
 
 
-* All variables in _DebuggerInformation_ Associations will be ToString-ed and include Context and any `$ModuleNumber` suffix
+* All variables in _DebuggerInformation_ Associations will be ToString-ed and include Context
 
 ### Options 
 
-* Populate the `DebuggerContexts` option with a list of context string expressions from which variables should be tracked
-	> Defaults to `DebuggerContexts -> $DebuggerContexts` (which is set by default to `{"Global`\*"}`)
+* Populate the `DebuggerContexts` option with a list of contexts from which variables should be tracked
+	> Defaults to `DebuggerContexts -> $DebuggerContexts` (where `$DebuggerContexts` is set by default to `{"Global`"}`)
 	
 * Use the `AbortOnMessage` option to stop evaluation upon the first message thrown
 	> Defaults to `AbortOnMessage -> True`
@@ -61,7 +61,6 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 * When `BreakOnAssert` is `True`, the Interrupt dialog is displayed upon execution of `Assert[False]`
 * Click _Abort_ in the Interrupt dialog to kill the evaluation
 * Click _Enter Subsession_ in Interrupt dialog to free the kernel for evaluations
-	* This allows `DebuggerInformation` to be queried mid-evaluation
 * Once the dialog is dismissed, evaluation must be controlled by the Debugger Controls
 	* CTRL + Shift + H: Halt
 	* CTRL + Shift + C: Continue
