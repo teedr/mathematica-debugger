@@ -160,7 +160,7 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPa
 			Context[$$variable],
 			RegularExpression[OptionValue[ContextsRegex]]
 		],
-		Sow[{UnixTime[],$$symbolString,$$value},"assignment"]
+		Sow[{UnixTime[],$$symbolString,Hold[$$value]},"assignment"]
 	]
 ];
 
