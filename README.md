@@ -213,6 +213,9 @@ In[1]:= Debugger[func[3], BreakOnAssert -> True]
 Out[1]= {7, 4}
 ```
 
+## Known Issues
+* There is an issue where an `Unset::write` error is thrown from the Debugger after aborting from a message. It doesn't seem to affect any functionality but tracking down the error's source is ongoing.
+
 ## Contributing
 
 Please! Fork this repository and open a pull request. Some potential future developments include:
