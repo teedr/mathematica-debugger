@@ -61,7 +61,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 								ModuleNumbers -> moduleNumbers
 							]&
 						],
-						{General::stop}
+						{General::stop,Unset::write}
 					],
 					messageHandler[
 						##,
