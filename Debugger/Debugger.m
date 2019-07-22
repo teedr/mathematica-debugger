@@ -1,3 +1,5 @@
+(* ::Package:: *)
+
 BeginPackage["Debugger`"];
 Needs["GeneralUtilities`"];
 
@@ -22,9 +24,9 @@ Options[Debugger]:={
 };
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	{reapReturn,return,sowedAssignments,sowedMessages},
-	
+
 	ClearAll[DebuggerInformation];
-	
+
 	(* Use Reap/Sow to optimize AssignmentLog appending *)
 	reapReturn = Reap[
 		With[
@@ -47,9 +49,10 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 				If[TrueQ[OptionValue[BreakOnAssert]],
 					$AssertFunction = assertHandler
 				];
+				CheckAbort[
 				WithMessageHandler[
 					(* If a message is Quieted, it wont be sent to the message handler
-						However, if the message is called many times and triggers the 
+						However, if the message is called many times and triggers the
 						General::stop message, General::stop is passed to the handler
 						Quiet General::stop as a hacky way to handle this *)
 					Quiet[
@@ -67,8 +70,9 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 						##,
 						AbortOnMessage -> abortOnMessage
 					]&
-				]
-			]
+				],
+					$Aborted[]
+			]]
 		],
 		_,
 		Rule
@@ -85,13 +89,13 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 		"failure",
 		{}
 	];
-	
+
 	populateDebuggerInformation[sowedAssignments,sowedMessages];
-	
+
 	If[MatchQ[return,$Aborted[]],
 		Message/@sowedMessages
 	];
-	
+
 	return
 ];
 SetAttributes[Debugger,HoldFirst];
@@ -154,7 +158,7 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPa
 			RegularExpression["\\$[0-9]+"] -> ""
 		]
 	];
-	
+
 	If[
 		StringMatchQ[
 			Context[$$variable],
@@ -169,9 +173,9 @@ Options[messageHandler]:={
 };
 messageHandler[failure_,OptionsPattern[]]:=With[
 	{},
-	
+
 	Sow[failure,"failure"];
-	
+
 	If[TrueQ[OptionValue[AbortOnMessage]],
 		Abort[]
 	];
@@ -179,7 +183,7 @@ messageHandler[failure_,OptionsPattern[]]:=With[
 
 assertHandler[HoldComplete[Assert[_,assertionLocation_List]]]:=With[
 	{},
-	
+
 	PrintTemporary[
 		StringJoin[
 			"Breakpoint at ",
@@ -189,18 +193,21 @@ assertHandler[HoldComplete[Assert[_,assertionLocation_List]]]:=With[
 			Last[assertionLocation]
 		]
 	];
-	
+
 	Interrupt[];
 ];
 assertHandler[Assert[HoldComplete[___]]]:=With[
 	{},
 	PrintTemporary["Breakpoint at unknown location"];
-	
+
 	Interrupt[];
 ];
 
+
+
 (* ::Section::Closed:: *)
 (*End Package*)
+
 
 End[];
 EndPackage[];
