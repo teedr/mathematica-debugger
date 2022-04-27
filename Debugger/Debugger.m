@@ -203,6 +203,12 @@ assertHandler[Assert[HoldComplete[___]]]:=With[
 	Interrupt[];
 ];
 
+(*LastDebuggerAssignments*)
+
+(*after releasing the debugger, can see the last set of variables that were assigned*)
+LastDebuggerAssignments[]:=LastDebuggerAssignments[20];
+LastDebuggerAssignments[x_Integer]:=Part["AssignmentLog" /. DebuggerInformation[], -x;;, 2];
+LastDebuggerAssignments[x:All]:=Part["AssignmentLog" /. DebuggerInformation[], All, 2];
 
 
 (* ::Section::Closed:: *)
