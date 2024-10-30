@@ -25,7 +25,7 @@ Options[Debugger]:={
 	ModuleNumbers -> False
 };
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
-	{reapReturn,return,sowedAssignments,sowedMessages},
+	{runningReturn, reapReturn,return,sowedAssignments,sowedMessages},
 
 	ClearAll[DebuggerInformation];
 
@@ -44,7 +44,8 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 					]
 				],
 				abortOnMessage = OptionValue[AbortOnMessage],
-				moduleNumbers = OptionValue[ModuleNumbers]
+				moduleNumbers = OptionValue[ModuleNumbers],
+				returnSymbol = runningReturn
 			},
 			Block[
 				{$AssertFunction},
@@ -52,7 +53,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 					$AssertFunction = assertHandler
 				];
 
-				WithMessageHandler[
+				runningReturn = WithMessageHandler[
 					(* If a message is Quieted, it wont be sent to the message handler
 						However, if the message is called many times and triggers the
 						General::stop message, General::stop is passed to the handler
@@ -70,12 +71,13 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 					],
 					messageHandler[
 						##,
-						AbortOnMessage -> abortOnMessage
+						AbortOnMessage -> abortOnMessage,
+						ToReturn -> returnSymbol
 					]&
 				];
 				(* we use label to force evaluation to stop earlier *)
 				Label[debuggerEndLabel];
-				$Aborted
+				runningReturn
 			]
 		],
 		_,
@@ -173,7 +175,8 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPa
 ];
 
 Options[messageHandler]:={
-	AbortOnMessage -> True
+	AbortOnMessage -> True,
+	ToReturn -> mySymbol
 };
 messageHandler[failure_,OptionsPattern[]]:=With[
 	{},
@@ -181,6 +184,11 @@ messageHandler[failure_,OptionsPattern[]]:=With[
 	Sow[failure,"failure"];
 
 	If[TrueQ[OptionValue[AbortOnMessage]],
+		(* set the returned value to be $Failed, then use Goto to abort early *)
+		(* Set HoldFirst, so we have use with *)
+		With[{return = OptionValue[ToReturn]},
+			Set[return, $Aborted]
+		];
 		Goto[debuggerEndLabel]
 	];
 ];
