@@ -35,7 +35,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 					Alternatives,
 					StringRiffle[
 						Map[
-							StringJoin[#,".*"]&,
+							StringJoin[#, ".*"]&,
 							OptionValue[DebuggerContexts]
 						],
 						"|"
@@ -50,29 +50,32 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 					$AssertFunction = assertHandler
 				];
 				CheckAbort[
-				WithMessageHandler[
-					(* If a message is Quieted, it wont be sent to the message handler
-						However, if the message is called many times and triggers the
-						General::stop message, General::stop is passed to the handler
-						Quiet General::stop as a hacky way to handle this *)
-					Quiet[
-						WithSetHandler[
-							codeBlock,
-							setHandler[
-								##,
-								ContextsRegex -> contextsRegex,
-								ModuleNumbers -> moduleNumbers
-							]&
+					WithMessageHandler[
+						(* If a message is Quieted, it wont be sent to the message handler
+							However, if the message is called many times and triggers the
+							General::stop message, General::stop is passed to the handler
+							Quiet General::stop as a hacky way to handle this *)
+						Quiet[
+							WithSetHandler[
+								codeBlock,
+								setHandler[
+									##,
+									ContextsRegex -> contextsRegex,
+									ModuleNumbers -> moduleNumbers
+								]&
+							],
+							{General::stop, Unset::write}
 						],
-						{General::stop,Unset::write}
+						messageHandler[
+							##,
+							AbortOnMessage -> abortOnMessage
+						]&
 					],
-					messageHandler[
-						##,
-						AbortOnMessage -> abortOnMessage
-					]&
-				],
-					$Aborted[]
-			]]
+					$Aborted[],
+					(* _DO_ _NOT_ propagate aborts for sure, MM loves to do this so sometimes when we throw messages (and abort), we ended up propagate a bit further and end up at a later point *)
+					PropagateAborts -> False
+				]
+			]
 		],
 		_,
 		Rule
@@ -92,9 +95,8 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 
 	populateDebuggerInformation[sowedAssignments,sowedMessages];
 
-	If[MatchQ[return,$Aborted[]],
-		Message/@sowedMessages
-	];
+	(* always print message so we know what is failing *)
+	Message /@ sowedMessages;
 
 	return
 ];
@@ -120,7 +122,8 @@ populateDebuggerInformation[assignments_List,failures_List]:=With[
 			Null,
 			Apply[
 				Rule,
-				SafeLast[assignments,{Null,Null,Null}][[{2,3}]]
+				(* Last now accepts second argument as default return *)
+				Last[assignments,{Null,Null,Null}][[{2,3}]]
 			]
 		]
 	},
