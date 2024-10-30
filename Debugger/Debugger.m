@@ -12,6 +12,8 @@ ModuleNumbers;
 
 $DebuggerContexts = {"Global`"};
 
+debuggerEndLabel = "Debugger End "<>CreateUUID[];
+
 Begin["`Private`"];
 
 ClearAll[DebuggerInformation];
@@ -49,32 +51,31 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 				If[TrueQ[OptionValue[BreakOnAssert]],
 					$AssertFunction = assertHandler
 				];
-				CheckAbort[
-					WithMessageHandler[
-						(* If a message is Quieted, it wont be sent to the message handler
-							However, if the message is called many times and triggers the
-							General::stop message, General::stop is passed to the handler
-							Quiet General::stop as a hacky way to handle this *)
-						Quiet[
-							WithSetHandler[
-								codeBlock,
-								setHandler[
-									##,
-									ContextsRegex -> contextsRegex,
-									ModuleNumbers -> moduleNumbers
-								]&
-							],
-							{General::stop, Unset::write}
+
+				WithMessageHandler[
+					(* If a message is Quieted, it wont be sent to the message handler
+						However, if the message is called many times and triggers the
+						General::stop message, General::stop is passed to the handler
+						Quiet General::stop as a hacky way to handle this *)
+					Quiet[
+						WithSetHandler[
+							codeBlock,
+							setHandler[
+								##,
+								ContextsRegex -> contextsRegex,
+								ModuleNumbers -> moduleNumbers
+							]&
 						],
-						messageHandler[
-							##,
-							AbortOnMessage -> abortOnMessage
-						]&
+						{General::stop, Unset::write}
 					],
-					$Aborted[],
-					(* _DO_ _NOT_ propagate aborts for sure, MM loves to do this so sometimes when we throw messages (and abort), we ended up propagate a bit further and end up at a later point *)
-					PropagateAborts -> False
-				]
+					messageHandler[
+						##,
+						AbortOnMessage -> abortOnMessage
+					]&
+				];
+				(* we use label to force evaluation to stop earlier *)
+				Label[debuggerEndLabel];
+				$Aborted
 			]
 		],
 		_,
@@ -180,7 +181,7 @@ messageHandler[failure_,OptionsPattern[]]:=With[
 	Sow[failure,"failure"];
 
 	If[TrueQ[OptionValue[AbortOnMessage]],
-		Abort[]
+		Goto[debuggerEndLabel]
 	];
 ];
 
