@@ -12,6 +12,7 @@ ModuleNumbers;
 
 $DebuggerContexts = {"Global`"};
 
+
 Begin["`Private`"];
 
 ClearAll[DebuggerInformation];
@@ -22,8 +23,12 @@ Options[Debugger]:={
 	BreakOnAssert -> False,
 	ModuleNumbers -> False
 };
+
+(* label we use for Goto/Label for early abort *)
+debuggerEndLabel = "Debugger End "<>CreateUUID[];
+
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
-	{reapReturn,return,sowedAssignments,sowedMessages},
+	{runningReturn, reapReturn,return,sowedAssignments,sowedMessages},
 
 	ClearAll[DebuggerInformation];
 
@@ -35,22 +40,23 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 					Alternatives,
 					StringRiffle[
 						Map[
-							StringJoin[#,".*"]&,
+							StringJoin[#, ".*"]&,
 							OptionValue[DebuggerContexts]
 						],
 						"|"
 					]
 				],
 				abortOnMessage = OptionValue[AbortOnMessage],
-				moduleNumbers = OptionValue[ModuleNumbers]
+				moduleNumbers = OptionValue[ModuleNumbers],
+				returnSymbol = runningReturn
 			},
 			Block[
 				{$AssertFunction},
 				If[TrueQ[OptionValue[BreakOnAssert]],
 					$AssertFunction = assertHandler
 				];
-				CheckAbort[
-				WithMessageHandler[
+
+				runningReturn = WithMessageHandler[
 					(* If a message is Quieted, it wont be sent to the message handler
 						However, if the message is called many times and triggers the
 						General::stop message, General::stop is passed to the handler
@@ -64,15 +70,18 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 								ModuleNumbers -> moduleNumbers
 							]&
 						],
-						{General::stop,Unset::write}
+						{General::stop, Unset::write}
 					],
 					messageHandler[
 						##,
-						AbortOnMessage -> abortOnMessage
+						AbortOnMessage -> abortOnMessage,
+						ToReturn -> returnSymbol
 					]&
-				],
-					$Aborted[]
-			]]
+				];
+				(* we use label to force evaluation to stop earlier *)
+				Label[debuggerEndLabel];
+				runningReturn
+			]
 		],
 		_,
 		Rule
@@ -92,9 +101,8 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 
 	populateDebuggerInformation[sowedAssignments,sowedMessages];
 
-	If[MatchQ[return,$Aborted[]],
-		Message/@sowedMessages
-	];
+	(* always print message so we know what is failing *)
+	Message /@ sowedMessages;
 
 	return
 ];
@@ -120,7 +128,8 @@ populateDebuggerInformation[assignments_List,failures_List]:=With[
 			Null,
 			Apply[
 				Rule,
-				SafeLast[assignments,{Null,Null,Null}][[{2,3}]]
+				(* Last now accepts second argument as default return *)
+				Last[assignments,{Null,Null,Null}][[{2,3}]]
 			]
 		]
 	},
@@ -169,7 +178,8 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPa
 ];
 
 Options[messageHandler]:={
-	AbortOnMessage -> True
+	AbortOnMessage -> True,
+	ToReturn -> mySymbol
 };
 messageHandler[failure_,OptionsPattern[]]:=With[
 	{},
@@ -177,7 +187,12 @@ messageHandler[failure_,OptionsPattern[]]:=With[
 	Sow[failure,"failure"];
 
 	If[TrueQ[OptionValue[AbortOnMessage]],
-		Abort[]
+		(* set the returned value to be $Failed, then use Goto to abort early *)
+		(* Set HoldFirst, so we have use with *)
+		With[{return = OptionValue[ToReturn]},
+			Set[return, $Aborted]
+		];
+		Goto[debuggerEndLabel]
 	];
 ];
 
