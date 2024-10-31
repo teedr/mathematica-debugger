@@ -12,7 +12,6 @@ ModuleNumbers;
 
 $DebuggerContexts = {"Global`"};
 
-debuggerEndLabel = "Debugger End "<>CreateUUID[];
 
 Begin["`Private`"];
 
@@ -24,6 +23,10 @@ Options[Debugger]:={
 	BreakOnAssert -> False,
 	ModuleNumbers -> False
 };
+
+(* label we use for Goto/Label for early abort *)
+debuggerEndLabel = "Debugger End "<>CreateUUID[];
+
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	{runningReturn, reapReturn,return,sowedAssignments,sowedMessages},
 
