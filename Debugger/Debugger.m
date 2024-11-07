@@ -92,9 +92,8 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 
 	populateDebuggerInformation[sowedAssignments,sowedMessages];
 
-	If[MatchQ[return,$Aborted],
-		Message/@sowedMessages
-	];
+	(* Throw messages *)
+	Message/@sowedMessages;
 
 	return
 ];
