@@ -49,7 +49,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 				If[TrueQ[OptionValue[BreakOnAssert]],
 					$AssertFunction = assertHandler
 				];
-				CheckAbort[
+				Catch[
 				WithMessageHandler[
 					(* If a message is Quieted, it wont be sent to the message handler
 						However, if the message is called many times and triggers the
@@ -71,7 +71,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 						AbortOnMessage -> abortOnMessage
 					]&
 				],
-					$Aborted[]
+					"DebuggerAbort"
 			]]
 		],
 		_,
@@ -92,9 +92,8 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 
 	populateDebuggerInformation[sowedAssignments,sowedMessages];
 
-	If[MatchQ[return,$Aborted[]],
-		Message/@sowedMessages
-	];
+	(* Throw messages *)
+	Message/@sowedMessages;
 
 	return
 ];
@@ -177,7 +176,9 @@ messageHandler[failure_,OptionsPattern[]]:=With[
 	Sow[failure,"failure"];
 
 	If[TrueQ[OptionValue[AbortOnMessage]],
-		Abort[]
+		(* We used to use Abort[] here but sometimes it would not actually abort, for reasons
+		beyond our comprehension. Throw/Catch seems to be more robust I believe? *)
+		Throw[$Aborted,"DebuggerAbort"]
 	];
 ];
 
