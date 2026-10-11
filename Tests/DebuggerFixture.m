@@ -41,3 +41,13 @@ fixtureReturn[x_]:=Module[{value}, value = If[x > 0, Return["early"], x]; "late"
 fixtureInitializer[x_]:=Module[{first = x + 1, second = x + 2}, first + second];
 
 fixtureAbort[x_]:=Module[{reached}, reached = x; Abort[]; reached];
+
+fixtureMutate[x_]:=Module[{list = {}, count = 0, assoc = <||>},
+	AppendTo[list, x];
+	count += 2;
+	count++;
+	list[[1]] = 10;
+	assoc["k"] = 1;
+	AssociateTo[assoc, "j" -> 2];
+	{list, count, assoc}
+];

@@ -85,6 +85,7 @@ With `TrackInputs`/`TrackLocations` on, every function under debug is rewritten 
 * Aborting a run (`Abort[]`, Alt+.) restores the original definitions the same way a normal return does
 * `DebuggerInputs[f]` — the pattern inputs of every call to `f`, one association per call
 * When a message aborts a run with `TrackLocations -> True`, the last tracked assignment is printed
+* Assignments into part of a variable (`x[[i]] = v`, `assoc["k"] = v`) are logged as `x[[i]]` / `assoc["k"]` in every run. With tracking on, `+=`, `-=`, `*=`, `/=`, `++`, `--`, `AssociateTo` and `KeyDropFrom`, which `WithSetHandler` never reports, log the variable's new value, and all of these get locations
 
 Locations are found by matching the rewritten rule back to its source text: the overload is chosen by its pattern names, and the n-th `x = ...` in that overload is the n-th `Set` of `x` in the rule. `$DebuggerSourceFiles` says where to look:
 

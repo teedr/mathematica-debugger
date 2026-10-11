@@ -51,7 +51,7 @@ Options[Debugger] = {
 	InstrumentSymbols -> Automatic
 };
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
-	{contextsRegex,settings,instrumentQ,symbols,reapReturn,failures,userAborted = False},
+	{contextsRegex,settings,instrumentQ,reapReturn,failures,userAborted = False},
 
 	ClearAll[DebuggerInformation];
 
@@ -68,12 +68,6 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 		"TrackLocations" -> TrueQ[OptionValue[TrackLocations]]
 	];
 	instrumentQ = Or[settings["TrackInputs"],settings["TrackLocations"]];
-
-	(* Functions are only rewritten when inputs or locations were asked for *)
-	symbols = If[instrumentQ,
-		instrumentationCandidates[OptionValue[DebuggerContexts],OptionValue[InstrumentSymbols]],
-		{}
-	];
 
 	$rewriteFailures = {};
 
@@ -107,7 +101,12 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 									ModuleNumbers -> moduleNumbers
 								]&
 							],
-							symbols,
+							(* Functions are only rewritten when inputs or locations were asked for. Choosing them scans
+								whole packages, so it runs here, inside the abort guard, rather than before the run *)
+							If[instrumentQ,
+								instrumentationCandidates[OptionValue[DebuggerContexts],OptionValue[InstrumentSymbols]],
+								{}
+							],
 							settings
 						],
 						{General::stop,Unset::write}
@@ -256,6 +255,37 @@ setHandler[HoldComplete[$$variable_Symbol], HoldComplete[$$value_],ops:OptionsPa
 		Sow[{UnixTime[],$$symbolString,Hold[$$value],$$rawString},"assignment"]
 	]
 ];
+(*
+	Assignments into part of a variable: x[[i]] = v, and assoc["k"] = v when assoc holds an Association.
+	Logged under the name x[[i]] / assoc["k"] with the assigned part's value. s[...] = v on a symbol without
+	an Association value is a definition (e.g. memoization), not a variable, and is ignored.
+*)
+setHandler[HoldComplete[$$target:Verbatim[Part][$$base_Symbol,___]],HoldComplete[$$value_],ops:OptionsPattern[]]:=
+	partSetHandler[HoldComplete[$$target],HoldComplete[$$base],HoldComplete[$$value],ops]/;OwnValues[$$base] =!= {};
+setHandler[HoldComplete[$$target:($$base:Except[List|Part,_Symbol])[___]],HoldComplete[$$value_],ops:OptionsPattern[]]:=
+	partSetHandler[HoldComplete[$$target],HoldComplete[$$base],HoldComplete[$$value],ops]/;MatchQ[OwnValues[$$base],{_ :> _Association}];
+
+Options[partSetHandler]:=Options[setHandler];
+partSetHandler[HoldComplete[$$target_],HoldComplete[$$base_Symbol],HoldComplete[$$value_],OptionsPattern[]]:=Module[
+	{$$baseString,$$rawString,$$symbolString},
+
+	If[StringMatchQ[Context[$$base],RegularExpression[OptionValue[ContextsRegex]]],
+		$$baseString = ToString[Unevaluated[$$base],InputForm];
+		(* the base keeps its context; contexts inside the part spec are dropped to keep the name readable *)
+		$$rawString = StringJoin[
+			$$baseString,
+			StringReplace[
+				StringDrop[ToString[Unevaluated[$$target],InputForm],StringLength[$$baseString]],
+				RegularExpression["[A-Za-z$][A-Za-z0-9$]*`"] -> ""
+			]
+		];
+		$$symbolString = If[TrueQ[OptionValue[ModuleNumbers]],
+			$$rawString,
+			StringReplace[$$rawString,RegularExpression["\\$[0-9]+"] -> ""]
+		];
+		Sow[{UnixTime[],$$symbolString,Hold[$$value],$$rawString},"assignment"]
+	]
+];
 
 Options[messageHandler]:={
 	AbortOnMessage -> True
@@ -332,8 +362,8 @@ ClearDebuggerCache[]:=(
 );
 
 (* Placeholder heads hold rebuilt Set/Function/With nodes unevaluated until the whole rule is rebuilt *)
-SetAttributes[{setPH,functionPH,withPH},HoldAllComplete];
-placeholderRules = {setPH -> Set, functionPH -> Function, withPH -> With};
+SetAttributes[{setPH,functionPH,withPH,sequencePH,mutationPH},HoldAllComplete];
+placeholderRules = {setPH -> Set, functionPH -> Function, withPH -> With, sequencePH -> CompoundExpression, mutationPH -> logMutation};
 
 SetAttributes[{symbolString,symbolContext,fullName,variableInfo,sequencePatternQ},HoldAll];
 symbolString[symbol_Symbol]:=ToString[HoldForm[symbol]];
@@ -343,6 +373,8 @@ fullName[symbol_Symbol]:=StringJoin[Context[symbol],SymbolName[Unevaluated[symbo
 (* Module numbers and lexical-scoping renames ("x$123", "x$") are not part of a variable's identity *)
 normalizeName[name_String]:=StringReplace[name,RegularExpression["\\$[0-9]*$"] -> ""];
 shortName[name_String]:=StringReplace[normalizeName[name],RegularExpression["^.*`"] -> ""];
+(* The variable a log name refers to: "x[[i]]" and "assoc[\"k\"]" belong to x and assoc *)
+baseName[name_String]:=normalizeName[StringReplace[name,RegularExpression["\\[.*$"] -> ""]];
 
 
 (* ::Subsection::Closed:: *)
@@ -526,7 +558,8 @@ instrumentRule[rule_RuleDelayed,ruleIndex_Integer,functionName_String,settings_A
 	{
 		held,trackedQ,rhsQ,blockedPositions,allowedQ,patternInfo,patternNames,setPositions,functionPositions,
 		withPositions,setVariables,functionVariables,setOrdinals,functionOrdinals,setOrdinalLookup,
-		setEdits,functionEdits,withEdits,patternEdits,edits
+		mutationPositions,mutationVariables,mutationOrdinals,
+		setEdits,functionEdits,withEdits,patternEdits,mutationEdits,edits
 	},
 
 	held = HoldComplete[rule];
@@ -563,6 +596,14 @@ instrumentRule[rule_RuleDelayed,ruleIndex_Integer,functionName_String,settings_A
 	setPositions = preOrder[Select[Position[held,Verbatim[Set][_Symbol|{__Symbol},_]],rhsQ]];
 	functionPositions = preOrder[Select[Position[held,Verbatim[Function][Except[Null,_Symbol]|{__Symbol},__]],rhsQ]];
 	withPositions = preOrder[Select[Position[held,Verbatim[With][_List,_]],rhsQ]];
+
+	(* Changes to part of a variable or by an operator (x[[i]] = v, AppendTo, +=, ++, AssociateTo, ...) *)
+	mutationPositions = Select[
+		preOrder[Select[Position[held,$mutationHeads[_,___]],rhsQ]],
+		mutationInfo[Extract[held,#,HoldComplete]] =!= None&
+	];
+	mutationVariables = Map[{mutationInfo[Extract[held,#,HoldComplete]]}&,mutationPositions];
+	mutationOrdinals = ordinals[mutationVariables];
 
 	setVariables = Map[heldVariables[Extract[held,#,HoldComplete]]&,setPositions];
 	functionVariables = Map[heldVariables[Extract[held,#,HoldComplete]]&,functionPositions];
@@ -716,7 +757,38 @@ instrumentRule[rule_RuleDelayed,ruleIndex_Integer,functionName_String,settings_A
 		]
 	];
 
-	edits = Join[setEdits,functionEdits,withEdits,patternEdits];
+	(*
+		Mutations the set handler reports (x[[i]] = v, assoc["k"] = v, AppendTo, PrependTo) get a marker, like a Set.
+		The ones it never reports (+=, ++, AssociateTo, KeyDropFrom, ...) log the variable's new value themselves.
+	*)
+	mutationEdits = MapThread[
+		Function[{position,variables,ordinal},
+			With[
+				{
+					info = First[variables],
+					tag = Association[
+						"Function" -> functionName,
+						"Rule" -> ruleIndex,
+						"Kind" -> "Mutation",
+						"Variables" -> Lookup[variables,"Name"],
+						"Ordinals" -> ordinal,
+						"PatternNames" -> patternNames
+					]
+				},
+				Which[
+					Or[!allowedQ[position],!trackedQ[info["Context"]]],
+						Nothing,
+					info["Reported"],
+						If[settings["TrackLocations"],mutationEdit[position,tag,"Marker",info],Nothing],
+					True,
+						mutationEdit[position,tag,"Log",info]
+				]
+			]
+		],
+		{mutationPositions,mutationVariables,mutationOrdinals}
+	];
+
+	edits = Join[setEdits,functionEdits,withEdits,patternEdits,mutationEdits];
 
 	If[edits === {},
 		rule,
@@ -778,6 +850,40 @@ setEdit[position_List,tag_Association,"Initializer"]:=With[
 		]
 	}
 ];
+
+mutationEdit[position_List,tag_Association,"Marker",_]:=With[
+	{tagId = registerTag[tag]},
+	{
+		position,
+		Function[node,
+			Replace[node,HoldComplete[mutation_] :> sequencePH[Sow[setMarker[tagId],"assignment"],mutation]]
+		]
+	}
+];
+mutationEdit[position_List,tag_Association,"Log",info_Association]:=With[
+	{tagId = registerTag[tag],name = info["Name"],baseHeld = info["Held"]},
+	{
+		position,
+		Function[node,
+			Replace[{node,baseHeld},{HoldComplete[mutation_],HoldComplete[base_]} :> mutationPH[tagId,name,mutation,base]]
+		]
+	}
+];
+
+(* Operator forms the set handler never reports; AppendTo/PrependTo and part assignments it does report *)
+$mutationHeads = Set|AddTo|SubtractFrom|TimesBy|DivideBy|Increment|Decrement|PreIncrement|PreDecrement|AssociateTo|KeyDropFrom|AppendTo|PrependTo;
+
+(* The variable a mutation changes, or None. Set with a plain symbol on the left is an ordinary Set, not a mutation. *)
+mutationInfo[HoldComplete[Verbatim[Set][target_,_]]]:=mutationBase[HoldComplete[target],True,False];
+mutationInfo[HoldComplete[(AppendTo|PrependTo)[target_,___]]]:=mutationBase[HoldComplete[target],True,True];
+mutationInfo[HoldComplete[_[target_,___]]]:=mutationBase[HoldComplete[target],False,True];
+mutationInfo[_]:=None;
+
+mutationBase[HoldComplete[symbol_Symbol],reportedQ_,True]:=Append[variableInfo[symbol],"Reported" -> reportedQ];
+mutationBase[HoldComplete[Verbatim[Part][symbol_Symbol,___]],reportedQ_,_]:=Append[variableInfo[symbol],"Reported" -> reportedQ];
+(* symbol[key]: a variable holding an Association, never a function (a symbol with definitions, e.g. memoization) *)
+mutationBase[HoldComplete[(symbol:Except[List|Part,_Symbol])[___]],reportedQ_,_]/;DownValues[symbol] === {}:=Append[variableInfo[symbol],"Reported" -> reportedQ];
+mutationBase[___]:=None;
 
 scopeInitializerQ[held_,position_List]:=And[
 	Length[position] >= 2,
@@ -859,6 +965,13 @@ logInputs[tagId_Integer,names_List,HoldComplete[values___]]:=With[
 ];
 logInputs[___]:=Null;
 
+(* A mutation the set handler does not report (+=, ++, AssociateTo, ...): log the variable's new value; return the mutation's own result *)
+SetAttributes[logMutation,SequenceHold];
+logMutation[tagId_Integer,name_String,result_,newValue_]:=(
+	Sow[{UnixTime[],name,Hold[newValue],DebuggerLocation[tagId]},"assignment"];
+	result
+);
+
 (* A Module/Block initializer's value, logged as a complete entry since the set handler does not report it *)
 SetAttributes[logAssigned,SequenceHold];
 logAssigned[tagId_Integer,name_String,value_]:=(
@@ -890,7 +1003,7 @@ pairLocations[items_List]:=Module[
 					{_,_String,_Hold,_DebuggerLocation},
 						Sow[ReplacePart[item,4 -> DebuggerLocation[First[Last[item]],call]],"paired"],
 					{_,_String,_Hold},
-						Sow[Append[item,popLocation[pending,normalizeName[item[[2]]]]],"paired"]
+						Sow[Append[item,popLocation[pending,baseName[item[[2]]]]],"paired"]
 				]
 			],
 			items
@@ -1055,6 +1168,22 @@ setRegex[variable_String]:=With[
 	]
 ];
 
+(* x[[...]] = / += ..., x["k"] = ..., x += 2 (and -=, *=, /=, ++, --), ++x, --x, AppendTo[x, ...] (and the other mutating functions) *)
+mutationRegex[variable_String]:=With[
+	{name = regexEscape[variable],operator = "(?:=(?![=!])|\\+=|-=|\\*=|/=|\\+\\+|--)"},
+	StringJoin[
+		$nameBefore,name,"\\s*\\[\\[[^;]*?\\]\\]\\s*",operator,
+		"|",
+		$nameBefore,name,"\\s*\\[(?!\\[)[^;]*?\\]\\s*",operator,
+		"|",
+		$nameBefore,name,$nameAfter,"\\s*(?:\\+=|-=|\\*=|/=|\\+\\+|--)",
+		"|",
+		"(?:\\+\\+|--)\\s*",name,$nameAfter,
+		"|",
+		"(?:AppendTo|PrependTo|AssociateTo|KeyDropFrom|AddTo|SubtractFrom|TimesBy|DivideBy|Increment|Decrement|PreIncrement|PreDecrement)\\[\\s*",name,$nameAfter
+	]
+];
+
 (* Function[x, ...], Function[{..., x, ...}, ...], x |-> ..., {..., x, ...} |-> ... *)
 functionRegex[variable_String]:=With[
 	{name = regexEscape[variable]},
@@ -1123,7 +1252,7 @@ resolveLocation[DebuggerLocation[id_Integer,call___Integer],variableName_String]
 	];
 
 	kind = tag["Kind"];
-	variable = normalizeName[variableName];
+	variable = baseName[variableName];
 	base = Join[
 		Association["Function" -> tag["Function"],"Kind" -> kind],
 		If[{call} === {},Association[],Association["Call" -> call]]
@@ -1139,6 +1268,7 @@ resolveLocation[DebuggerLocation[id_Integer,call___Integer],variableName_String]
 	matches = Switch[kind,
 		"Pattern", Map[{#["File"],#["Start"]}&,chosen],
 		"Function", Flatten[Map[blockMatches[#,functionRegex[shortName[variable]]]&,chosen],1],
+		"Mutation", Flatten[Map[blockMatches[#,mutationRegex[shortName[variable]]]&,chosen],1],
 		_, Flatten[Map[blockMatches[#,setRegex[shortName[variable]]]&,chosen],1]
 	];
 
@@ -1190,10 +1320,11 @@ matchingIndices[log_List,name_String]:=With[
 ];
 
 nameMatchQ[name_String,target_String]:=With[
-	{normalized = normalizeName[name]},
+	{normalized = normalizeName[name],base = baseName[name]},
 	Or[
 		normalized === target,
-		And[StringFreeQ[target,"`"],shortName[normalized] === target]
+		base === target,
+		And[StringFreeQ[target,"`"],Or[shortName[normalized] === target,shortName[base] === target]]
 	]
 ];
 

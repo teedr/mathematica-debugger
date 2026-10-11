@@ -209,3 +209,42 @@ VerificationTest[
 	{"aborted", True, True, "Fixture`reached" -> Hold[1]},
 	TestID -> "An abort mid-run (same unwinding as Alt+.) restores definitions and keeps the log"
 ]
+
+VerificationTest[
+	Block[{Debugger`Private`instrumentationCandidates},
+		(* abort while choosing which functions to instrument, before the code under test runs *)
+		Debugger`Private`instrumentationCandidates[___] := Abort[];
+		{
+			CheckAbort[Debugger[Fixture`fixtureOuter[3], $fixtureOptions], "aborted"],
+			AssociationQ[DebuggerInformation],
+			DebuggerInformation["AssignmentLog"]
+		}
+	],
+	{"aborted", True, {}},
+	TestID -> "An abort during setup is caught and still leaves DebuggerInformation set"
+]
+
+VerificationTest[
+	Debugger[Fixture`fixtureMutate[5], DebuggerContexts -> {"Fixture`"}];
+	KeyExistsQ[DebuggerInformation["CurrentAssignments"], #]& /@ {"Fixture`list[[1]]", "Fixture`assoc[\"k\"]"},
+	{True, True},
+	TestID -> "Part and key assignments are logged even when untracked"
+]
+
+VerificationTest[
+	{
+		Debugger[Fixture`fixtureMutate[5], $fixtureOptions],
+		Lookup[DebuggerWhere["count"], "Line"],
+		Lookup[DebuggerWhere["list"], "Line"],
+		Lookup[DebuggerWhere["assoc"], "Line"],
+		ReleaseHold[Lookup[DebuggerInformation["CurrentAssignments"], {"Fixture`count", "Fixture`list[[1]]", "Fixture`assoc"}]]
+	},
+	{
+		{{10}, 3, <|"k" -> 1, "j" -> 2|>},
+		{45, 47, 48},
+		{45, 46, 49},
+		{45, 50, 51},
+		{3, 10, <|"k" -> 1, "j" -> 2|>}
+	},
+	TestID -> "AppendTo, +=, ++, part/key assignments and AssociateTo are logged with their lines"
+]
