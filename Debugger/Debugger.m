@@ -1,5 +1,15 @@
 (* ::Package:: *)
 
+(*
+	Debugger[code] evaluates code, logs every assignment to a variable in DebuggerContexts, and leaves the log in
+	DebuggerInformation; a message stops the run (AbortOnMessage) and is re-issued at the end.
+
+	GeneralUtilities`WithSetHandler reports each Set to setHandler, which Sows it; the Reap around the run collects
+	the AssignmentLog. TrackInputs/TrackLocations also rewrite the functions under debug (Instrumentation) so they log
+	values that never go through Set (inputs, With constants, +=, ...) and tag each assignment with where it happened;
+	DebuggerWhere, DebuggerHistory and DebuggerInputs read that back (Locations).
+*)
+
 BeginPackage["Debugger`"];
 Needs["GeneralUtilities`"];
 
@@ -50,6 +60,11 @@ Options[Debugger] = {
 	TrackLocations -> False,
 	InstrumentSymbols -> Automatic
 };
+(*
+	One run: read the options; evaluate the code inside Reap, an abort guard and the message handler (and, when
+	tracking, inside the block holding the rewritten functions) with the set handler on; stash the raw log and
+	build DebuggerInformation from it; re-issue messages and say where the run stopped.
+*)
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	{contextsRegex,settings,instrumentQ,reapReturn,failures,userAborted = False},
 
@@ -163,6 +178,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 ];
 SetAttributes[Debugger,HoldFirst];
 
+(* The raw Sow stream of the last run, kept until DebuggerInformation has been built from it *)
 $lastRun = Association["Sowed" -> {},"InstrumentQ" -> False];
 
 (* Every AssignmentLog entry is {time, variable, Hold[value], location} *)
@@ -191,6 +207,7 @@ dropRepeatedReports[items_List]:=Map[
 	]
 ];
 
+(* The keys a run leaves in DebuggerInformation *)
 populateDebuggerInformation[assignments_List,failures_List,stacks_List]:=With[
 	{
 		(* Association keeps the last value of a repeated key at the position of its first assignment *)
@@ -218,6 +235,7 @@ populateDebuggerInformation[assignments_List,failures_List,stacks_List]:=With[
 	]
 ];
 
+(* Called by WithSetHandler for every Set during the run; logs it when the variable's context is tracked *)
 Options[setHandler]:={
 	ContextsRegex -> "*",
 	ModuleNumbers -> False
@@ -287,6 +305,8 @@ partSetHandler[HoldComplete[$$target_],HoldComplete[$$base_Symbol],HoldComplete[
 	]
 ];
 
+(* Called for every message that is not Quieted: records it and the Stack[] at that point, then stops the run
+	unless AbortOnMessage -> False *)
 Options[messageHandler]:={
 	AbortOnMessage -> True
 };
@@ -303,6 +323,7 @@ messageHandler[failure_,OptionsPattern[]]:=With[
 	];
 ];
 
+(* With BreakOnAssert -> True, a failed Assert opens the Interrupt dialog so the run can be inspected *)
 assertHandler[HoldComplete[Assert[_,assertionLocation_List]]]:=With[
 	{},
 
@@ -346,6 +367,8 @@ LastDebuggerAssignments[x:All]:=Part["AssignmentLog" /. DebuggerInformation[], A
 	Internal`InheritedBlock in withInstrumentation, so the original definitions come back when Debugger returns.
 *)
 
+(* Session state: rewritten rules per function and settings, the location tags that log entries refer to, the
+	functions whose rewrite failed this run, and the source files read to resolve locations *)
 $instrumentCache = Association[];
 $rewriteFailures = {};
 $locationTags = Association[];
@@ -365,6 +388,7 @@ ClearDebuggerCache[]:=(
 SetAttributes[{setPH,functionPH,withPH,sequencePH,mutationPH},HoldAllComplete];
 placeholderRules = {setPH -> Set, functionPH -> Function, withPH -> With, sequencePH -> CompoundExpression, mutationPH -> logMutation};
 
+(* Symbol names: symbolString is the form setHandler logs (context omitted when on $ContextPath), fullName always has the context *)
 SetAttributes[{symbolString,symbolContext,fullName,variableInfo,sequencePatternQ},HoldAll];
 symbolString[symbol_Symbol]:=ToString[HoldForm[symbol]];
 symbolContext[symbol_Symbol]:=Context[symbol];
@@ -397,6 +421,7 @@ instrumentationCandidates[contexts_List,Automatic]:=Module[
 instrumentationCandidates[_,symbols_List]:=Select[heldSymbols[symbols],instrumentableQ];
 instrumentationCandidates[_,_]:={};
 
+(* For "Pkg`Private`", the public symbols of package Pkg`: from Packager when it is loaded, otherwise every symbol in Pkg` *)
 publicSymbolNames[context_String]:=With[
 	{package = StringReplace[context,"Private`"~~EndOfString -> ""]},
 	If[And[packagerQ[],MemberQ[$Packages,package]],
@@ -414,6 +439,7 @@ publicSymbolNames[context_String]:=With[
 	]
 ];
 
+(* SLL's Packager is loaded, so it can say which package and source files a function belongs to *)
 packagerQ[]:=And[
 	NameQ["Packager`PackageSymbols"],
 	NameQ["Packager`PackageMetadata"],
@@ -434,6 +460,7 @@ heldSymbols[items_List]:=Cases[
 	HoldComplete[_Symbol]
 ];
 
+(* Has definitions to rewrite, and is neither Locked nor part of the system or the debugger itself *)
 instrumentableQ[HoldComplete[symbol_Symbol]]:=And[
 	!StringStartsQ[Context[symbol],"Debugger`"|"GeneralUtilities`"|"System`"|"Internal`"],
 	!MemberQ[Attributes[symbol],Locked],
@@ -453,6 +480,7 @@ withInstrumentation[body_,symbols:{__HoldComplete},settings_Association]:=Replac
 	]
 ];
 
+(* A rewrite depends on the function, the tracked contexts and which of TrackInputs/TrackLocations is on *)
 cacheKey[name_String,settings_Association]:={
 	name,
 	settings["ContextsRegex"],
@@ -494,6 +522,7 @@ stubRule[held:HoldComplete[symbol_Symbol],settings_Association]:=With[
 	HoldPattern[symbol[arguments___]] :> (instrumentNow[heldSymbol,instrumentSettings]; symbol[arguments])
 ];
 
+(* Rewrites the function's rules (without the stub), installs them and caches the result *)
 instrumentNow[HoldComplete[symbol_Symbol],settings_Association]:=Quiet[
 	Module[
 		{name,originalDownValues,originalSubValues,newDownValues,newSubValues,failedQ},
@@ -543,6 +572,7 @@ instrumentRules[functionName_String,rules_List,settings_Association]:=MapIndexed
 	rules
 ];
 
+(* A tag describes one rewritten node (function, kind, variables, ordinals); log entries carry only its id *)
 registerTag[tag_Association]:=(
 	$tagCounter = $tagCounter + 1;
 	$locationTags[$tagCounter] = tag;
@@ -817,6 +847,7 @@ applyEdit[current_HoldComplete,{position_List,builder_}]:=With[
 	If[MatchQ[rebuilt,_HoldComplete],current,ReplacePart[current,position -> rebuilt]]
 ];
 
+(* position is inside the node at prefix *)
 prefixQ[prefix_List,position_List]:=And[
 	Length[prefix] <= Length[position],
 	Take[position,Length[prefix]] === prefix
@@ -828,6 +859,7 @@ preOrder[positions_List]:=With[
 	SortBy[positions,PadRight[#,depth,-1]&]
 ];
 
+(* Edits are {position, builder}: the builder takes the node there, held, and returns its replacement *)
 setEdit[position_List,tag_Association,"Marker"]:=With[
 	{tagId = registerTag[tag]},
 	{
@@ -851,6 +883,7 @@ setEdit[position_List,tag_Association,"Initializer"]:=With[
 	}
 ];
 
+(* A marker for mutations the set handler reports; logMutation for the ones it does not *)
 mutationEdit[position_List,tag_Association,"Marker",_]:=With[
 	{tagId = registerTag[tag]},
 	{
@@ -879,12 +912,14 @@ mutationInfo[HoldComplete[(AppendTo|PrependTo)[target_,___]]]:=mutationBase[Hold
 mutationInfo[HoldComplete[_[target_,___]]]:=mutationBase[HoldComplete[target],False,True];
 mutationInfo[_]:=None;
 
+(* mutationBase[target, reportedQ, plainSymbolQ]: the variable that target (x, x[[i]] or x[key]) changes; a bare x counts only when plainSymbolQ *)
 mutationBase[HoldComplete[symbol_Symbol],reportedQ_,True]:=Append[variableInfo[symbol],"Reported" -> reportedQ];
 mutationBase[HoldComplete[Verbatim[Part][symbol_Symbol,___]],reportedQ_,_]:=Append[variableInfo[symbol],"Reported" -> reportedQ];
 (* symbol[key]: a variable holding an Association, never a function (a symbol with definitions, e.g. memoization) *)
 mutationBase[HoldComplete[(symbol:Except[List|Part,_Symbol])[___]],reportedQ_,_]/;DownValues[symbol] === {}:=Append[variableInfo[symbol],"Reported" -> reportedQ];
 mutationBase[___]:=None;
 
+(* The Set at position initializes a Module/Block variable (scopeInitializerQ) or a With constant (withInitializerQ) *)
 scopeInitializerQ[held_,position_List]:=And[
 	Length[position] >= 2,
 	position[[-2]] === 1,
@@ -916,12 +951,14 @@ ordinals[variableLists_List]:=Module[
 	]
 ];
 
+(* What the rewrite needs about a bound symbol: its log name, its context (to check tracking) and the symbol, held *)
 variableInfo[symbol_Symbol]:=Association[
 	"Name" -> normalizeName[symbolString[symbol]],
 	"Context" -> symbolContext[symbol],
 	"Held" -> HoldComplete[symbol]
 ];
 
+(* The symbols a Set, Function or With node binds *)
 heldVariables[HoldComplete[Verbatim[Set][symbol_Symbol,_]]]:={variableInfo[symbol]};
 heldVariables[HoldComplete[Verbatim[Set][symbols:{__Symbol},_]]]:=Cases[HoldComplete[symbols],symbol_Symbol :> variableInfo[symbol],{2}];
 heldVariables[HoldComplete[Verbatim[Function][symbol_Symbol,__]]]:={variableInfo[symbol]};
@@ -939,6 +976,7 @@ conditionTailQ[HoldComplete[Verbatim[Condition][_,_]]]:=True;
 conditionTailQ[HoldComplete[(Module|Block|With|withPH)[_,body_]]]:=conditionTailQ[HoldComplete[body]];
 conditionTailQ[_]:=False;
 
+(* Puts log first in body, or first inside its trailing Condition *)
 injectHeld[HoldComplete[Verbatim[Condition][value_,test_]],HoldComplete[log_]]:=HoldComplete[Condition[CompoundExpression[log,value],test]];
 injectHeld[HoldComplete[(head:(Module|Block|With|withPH))[variables_,body_]],log_HoldComplete]/;conditionTailQ[HoldComplete[body]]:=Replace[
 	injectHeld[HoldComplete[body],log],
@@ -1014,6 +1052,7 @@ pairLocations[items_List]:=Module[
 	Replace[paired,{{entries_List} :> entries,_ -> {}}]
 ];
 
+(* Takes the newest pending marker for a variable *)
 SetAttributes[popLocation,HoldFirst];
 popLocation[pending_,variable_String]:=With[
 	{ids = Lookup[pending,variable,{}]},
@@ -1024,6 +1063,7 @@ popLocation[pending_,variable_String]:=With[
 	]
 ];
 
+(* Shown in the log as <<function Kind>> *)
 Format[DebuggerLocation[id_Integer,___]]:=With[
 	{tag = Lookup[$locationTags,id,Association[]]},
 	Row[{"\[LeftSkeleton]",shortName[Lookup[tag,"Function","?"]]," ",Lookup[tag,"Kind",""],"\[RightSkeleton]"}]
@@ -1046,6 +1086,7 @@ sourceFilesFor[function_String]:=With[
 	]
 ];
 
+(* $DebuggerSourceFiles when set, otherwise the function's package sources from Packager *)
 findSourceFiles[function_String]:=Which[
 	ListQ[$DebuggerSourceFiles],
 		$DebuggerSourceFiles,
@@ -1118,6 +1159,7 @@ fileIndex[file_String]:=Module[
 	]
 ];
 
+(* Every definition block (one per overload) of function across its source files *)
 sourceBlocks[function_String]:=Flatten[
 	Map[
 		Function[file,
@@ -1143,6 +1185,7 @@ stripCode[lines_List]:=StringSplit[
 	All
 ];
 
+(* A block's lines with comments and strings blanked out *)
 blockLines[block_Association]:=With[
 	{lines = fileLines[block["File"]]},
 	stripCode[lines[[block["Start"];;Min[block["End"],Length[lines]]]]]
@@ -1153,6 +1196,7 @@ blockLines[block_Association]:=With[
 (*Matching source*)
 
 
+(* A variable name only matches whole: not preceded or followed by identifier characters *)
 $nameBefore = "(?<![A-Za-z0-9$`])";
 $nameAfter = "(?![A-Za-z0-9$`])";
 
@@ -1208,6 +1252,7 @@ blockMatches[block_Association,regex_String]:=Flatten[
 	1
 ];
 
+(* A definition's left-hand side (its text up to :=) and the pattern names in it, used to tell overloads apart *)
 blockHeader[block_Association]:=With[
 	{lines = fileLines[block["File"]]},
 	First[
@@ -1233,6 +1278,7 @@ chooseOverloads[blocks_List,patternNames_List]:=If[Length[blocks] <= 1,
 	]
 ];
 
+(* The trimmed text of one source line *)
 sourceLine[{file_String,line_Integer}]:=With[
 	{lines = fileLines[file]},
 	If[1 <= line <= Length[lines],StringTrim[lines[[line]]],Missing["NotAvailable"]]
@@ -1243,6 +1289,10 @@ sourceLine[{file_String,line_Integer}]:=With[
 (*Resolving*)
 
 
+(*
+	File, line and code for one log entry: find the function's source blocks, pick the overload by pattern names,
+	then take the textual match of the variable whose position matches the node's ordinal in the rule.
+*)
 resolveLocation[DebuggerLocation[id_Integer,call___Integer],variableName_String]:=Module[
 	{tag,kind,variable,base,blocks,chosen,matches,ordinal,location},
 
@@ -1296,17 +1346,20 @@ resolveLocation[DebuggerLocation[id_Integer,call___Integer],variableName_String]
 ];
 resolveLocation[missing_,_]:=Association["Function" -> missing,"File" -> missing,"Line" -> missing];
 
+(* The AssignmentLog of the last run, or {} *)
 assignmentLog[]:=Replace[
 	DebuggerInformation,
 	{information_Association :> Lookup[information,"AssignmentLog",{}],_ -> {}}
 ];
 
+(* An entry with its resolved location, as DebuggerWhere returns it *)
 describeEntry[entry_List,index_Integer]:=Join[
 	Association["Index" -> index,"Variable" -> entry[[2]]],
 	resolveLocation[If[Length[entry] >= 4,entry[[4]],Missing["NotTracked"]],entry[[2]]],
 	Association["Value" -> entry[[3]]]
 ];
 
+(* The last entry with a location, or the last entry when none has one *)
 lastTrackedIndex[log_List]:=SelectFirst[
 	Range[Length[log],1,-1],
 	MatchQ[log[[#,-1]],_DebuggerLocation]&,
@@ -1349,6 +1402,7 @@ DebuggerWhere[name_String]:=With[
 ];
 DebuggerWhere[symbol_Symbol]:=DebuggerWhere[symbolString[symbol]];
 
+(* Display helpers: a clickable label when $DebuggerLinkTemplate is set, and "function  File.m:line" *)
 locationLink[label_String,file_String,line_Integer]:=If[StringQ[$DebuggerLinkTemplate],
 	Hyperlink[
 		label,
@@ -1384,6 +1438,7 @@ whereLabel[where_Association]:=With[
 	]
 ];
 
+(* Printed when a run is aborted, or stopped by a message while TrackLocations is on *)
 printLastLocation[reason_String]:=Quiet[
 	With[
 		{where = DebuggerWhere[]},
@@ -1432,6 +1487,7 @@ DebuggerHistory[indices:{___Integer}]:=Quiet[
 	]
 ];
 
+(* DebuggerInputs: entries logged from the pattern inputs of the given function, grouped by call *)
 functionNameMatchQ[name_String,query_String]:=Or[
 	name === query,
 	And[StringFreeQ[query,"`"],shortName[name] === query]
