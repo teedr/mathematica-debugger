@@ -60,19 +60,19 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 	> Defaults to `ModuleNumbers -> False`
 
 * Use the `TrackInputs` option to also log values that are bound without `Set`
-	> Defaults to `TrackInputs -> False`
+	> Defaults to `TrackInputs -> True`
 	* Function pattern inputs: `mySamples` in `ExperimentFoo[mySamples:ListableP[...], myOptions:OptionsPattern[]] := ...`
 	* `Function` parameters: `element` in `Map[Function[{element}, ...], list]`
 	* `With` constants: `doubled` in `With[{doubled = 2 a}, ...]`
 	* Sequence patterns (`x__`, `opts:OptionsPattern[]`) are logged as a list of what they matched; inputs of `HoldAll` functions are logged unevaluated
 
 * Use the `TrackLocations` option to record where each tracked assignment happened (function, file and line)
-	> Defaults to `TrackLocations -> False`
+	> Defaults to `TrackLocations -> True`
 
 * Use the `InstrumentSymbols` option to limit which functions are rewritten for `TrackInputs`/`TrackLocations`
 	> Defaults to `InstrumentSymbols -> Automatic`: every function in `DebuggerContexts` plus the public functions of those packages
 
-Set defaults once with `SetOptions`, e.g. `SetOptions[Debugger, TrackInputs -> True, TrackLocations -> True]`.
+Turn them off with `SetOptions`, e.g. `SetOptions[Debugger, TrackInputs -> False, TrackLocations -> False]`, to get the plain assignment log without rewriting any function.
 
 ### Inputs and locations
 

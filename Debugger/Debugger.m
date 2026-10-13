@@ -31,8 +31,8 @@ ClearDebuggerCache;
 $DebuggerSourceFiles;
 $DebuggerLinkTemplate;
 
-TrackInputs::usage = "TrackInputs is an option for Debugger. When True, values bound without Set are logged like assignments: function pattern inputs (f[x_] := ...), Function parameters and With constants.";
-TrackLocations::usage = "TrackLocations is an option for Debugger. When True, every logged assignment remembers the function and source line that made it. Query it with DebuggerWhere or DebuggerHistory.";
+TrackInputs::usage = "TrackInputs is an option for Debugger, True by default. When True, values bound without Set are logged like assignments: function pattern inputs (f[x_] := ...), Function parameters and With constants.";
+TrackLocations::usage = "TrackLocations is an option for Debugger, True by default. When True, every logged assignment remembers the function and source line that made it. Query it with DebuggerWhere or DebuggerHistory.";
 InstrumentSymbols::usage = "InstrumentSymbols is an option for Debugger giving the functions rewritten for TrackInputs and TrackLocations. Automatic uses every function in DebuggerContexts plus the public functions of those packages.";
 DebuggerWhere::usage = "DebuggerWhere[] gives the source location of the last tracked assignment of the last Debugger run. DebuggerWhere[n] gives it for entry n of the AssignmentLog (negative n counts from the end). DebuggerWhere[\"var\"] gives every assignment of var with its location.";
 DebuggerHistory::usage = "DebuggerHistory[n] shows the last n assignments of the last Debugger run with the function, file and line that made each one. DebuggerHistory[\"var\"] shows every assignment of var; DebuggerHistory[{i, ...}] shows those AssignmentLog entries.";
@@ -56,8 +56,8 @@ Options[Debugger] = {
 	AbortOnMessage -> True,
 	BreakOnAssert -> False,
 	ModuleNumbers -> False,
-	TrackInputs -> False,
-	TrackLocations -> False,
+	TrackInputs -> True,
+	TrackLocations -> True,
 	InstrumentSymbols -> Automatic
 };
 (*

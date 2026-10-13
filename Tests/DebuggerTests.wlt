@@ -27,7 +27,7 @@ VerificationTest[
 VerificationTest[
 	$fixtureOptions = Sequence[DebuggerContexts -> {"Fixture`"}, TrackInputs -> True, TrackLocations -> True];
 	{
-		Debugger[Fixture`fixtureOuter[3], DebuggerContexts -> {"Fixture`"}],
+		Debugger[Fixture`fixtureOuter[3], DebuggerContexts -> {"Fixture`"}, TrackInputs -> False, TrackLocations -> False],
 		Union[Map[Length, DebuggerInformation["AssignmentLog"]]],
 		DebuggerInformation["AssignmentLog"][[1, 4]]
 	},
@@ -225,7 +225,7 @@ VerificationTest[
 ]
 
 VerificationTest[
-	Debugger[Fixture`fixtureMutate[5], DebuggerContexts -> {"Fixture`"}];
+	Debugger[Fixture`fixtureMutate[5], DebuggerContexts -> {"Fixture`"}, TrackInputs -> False, TrackLocations -> False];
 	KeyExistsQ[DebuggerInformation["CurrentAssignments"], #]& /@ {"Fixture`list[[1]]", "Fixture`assoc[\"k\"]"},
 	{True, True},
 	TestID -> "Part and key assignments are logged even when untracked"
