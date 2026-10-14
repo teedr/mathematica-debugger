@@ -4,10 +4,10 @@
 	Debugger[code] evaluates code, logs every assignment to a variable in DebuggerContexts, and leaves the log in
 	DebuggerInformation; a message stops the run (AbortOnMessage) and is re-issued at the end.
 
-	GeneralUtilities`WithSetHandler reports each Set to setHandler, which Sows it; the Reap around the run collects
-	the AssignmentLog. TrackInputs/TrackLocations also rewrite the functions under debug (Instrumentation) so they log
-	values that never go through Set (inputs, With constants, +=, ...) and tag each assignment with where it happened;
-	DebuggerWhere, DebuggerHistory and DebuggerInputs read that back (Locations).
+	Untracked, GeneralUtilities`WithSetHandler reports each Set to setHandler, which Sows it, and the Reap around the
+	run collects the AssignmentLog. With TrackInputs/TrackLocations (the default) the run is observed with TraceScan
+	instead (Tracing): no definition is changed, and the log also gets inputs, With constants and +=, AppendTo, ...,
+	each tagged with the function it ran in. DebuggerWhere, DebuggerHistory and DebuggerInputs read that back (Locations).
 *)
 
 BeginPackage["Debugger`"];
@@ -21,7 +21,7 @@ BreakOnAssert;
 ModuleNumbers;
 TrackInputs;
 TrackLocations;
-InstrumentSymbols;
+TrackedFunctions;
 DebuggerWhere;
 DebuggerHistory;
 DebuggerInputs;
@@ -33,13 +33,13 @@ $DebuggerLinkTemplate;
 
 TrackInputs::usage = "TrackInputs is an option for Debugger, True by default. When True, values bound without Set are logged like assignments: function pattern inputs (f[x_] := ...), Function parameters and With constants.";
 TrackLocations::usage = "TrackLocations is an option for Debugger, True by default. When True, every logged assignment remembers the function and source line that made it. Query it with DebuggerWhere or DebuggerHistory.";
-InstrumentSymbols::usage = "InstrumentSymbols is an option for Debugger giving the functions rewritten for TrackInputs and TrackLocations. Automatic uses every function in DebuggerContexts plus the public functions of those packages.";
+TrackedFunctions::usage = "TrackedFunctions is an option for Debugger giving the functions whose calls are tracked (inputs logged, and assignments attributed to them) when TrackInputs or TrackLocations is on. Automatic uses every function in DebuggerContexts plus the public functions of those packages.";
 DebuggerWhere::usage = "DebuggerWhere[] gives the source location of the last tracked assignment of the last Debugger run. DebuggerWhere[n] gives it for entry n of the AssignmentLog (negative n counts from the end). DebuggerWhere[\"var\"] gives every assignment of var with its location.";
 DebuggerHistory::usage = "DebuggerHistory[n] shows the last n assignments of the last Debugger run with the function, file and line that made each one. DebuggerHistory[\"var\"] shows every assignment of var; DebuggerHistory[{i, ...}] shows those AssignmentLog entries.";
 DebuggerInputs::usage = "DebuggerInputs[f] gives the pattern inputs of every call to f during the last Debugger run, one association per call. Requires TrackInputs -> True.";
-DebuggerLocation::usage = "DebuggerLocation[id] is the source tag stored as the fourth element of AssignmentLog entries. DebuggerWhere resolves it to a file and line.";
+DebuggerLocation::usage = "DebuggerLocation[function, kind, rule, observed, call] is the location stored as the fourth element of AssignmentLog entries of a tracked run. DebuggerWhere resolves it to a file and line.";
 LastDebuggerAssignments::usage = "LastDebuggerAssignments[n] gives the names of the last n assigned variables (default 20; All for every one).";
-ClearDebuggerCache::usage = "ClearDebuggerCache[] drops the cached instrumented definitions and source-file indexes.";
+ClearDebuggerCache::usage = "ClearDebuggerCache[] drops the cached source files and source-file indexes.";
 $DebuggerSourceFiles::usage = "$DebuggerSourceFiles gives the source files searched to resolve locations. Automatic asks Packager when it is loaded. It may also be a list of files, or a function taking the full name of a function and returning its files.";
 $DebuggerLinkTemplate::usage = "$DebuggerLinkTemplate is a StringTemplate string with File and Line slots used to hyperlink locations, e.g. a vscode://file/ URL ending in the File slot, a colon and the Line slot. None disables links.";
 
@@ -58,15 +58,15 @@ Options[Debugger] = {
 	ModuleNumbers -> False,
 	TrackInputs -> True,
 	TrackLocations -> True,
-	InstrumentSymbols -> Automatic
+	TrackedFunctions -> Automatic
 };
 (*
-	One run: read the options; evaluate the code inside Reap, an abort guard and the message handler (and, when
-	tracking, inside the block holding the rewritten functions) with the set handler on; stash the raw log and
-	build DebuggerInformation from it; re-issue messages and say where the run stopped.
+	One run: read the options; evaluate the code inside Reap, an abort guard and the message handler, observed by
+	TraceScan when tracking and by the set handler otherwise; stash the raw log and build DebuggerInformation from it;
+	re-issue messages and say where the run stopped.
 *)
 Debugger[codeBlock_,OptionsPattern[]]:=Module[
-	{contextsRegex,settings,instrumentQ,reapReturn,failures,userAborted = False},
+	{contextsRegex,settings,trackedQ,reapReturn,failures,userAborted = False},
 
 	ClearAll[DebuggerInformation];
 
@@ -80,11 +80,10 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 	settings = Association[
 		"ContextsRegex" -> contextsRegex,
 		"TrackInputs" -> TrueQ[OptionValue[TrackInputs]],
-		"TrackLocations" -> TrueQ[OptionValue[TrackLocations]]
+		"TrackLocations" -> TrueQ[OptionValue[TrackLocations]],
+		"ModuleNumbers" -> TrueQ[OptionValue[ModuleNumbers]]
 	];
-	instrumentQ = Or[settings["TrackInputs"],settings["TrackLocations"]];
-
-	$rewriteFailures = {};
+	trackedQ = Or[settings["TrackInputs"],settings["TrackLocations"]];
 
 	(* Use Reap/Sow to optimize AssignmentLog appending
 		CheckAbort sits inside Reap so an abort (Alt+.) that reaches this far still returns the log *)
@@ -107,7 +106,9 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 						General::stop message, General::stop is passed to the handler
 						Quiet General::stop as a hacky way to handle this *)
 					Quiet[
-						withInstrumentation[
+						(* Setting up tracking reads whole packages, so it runs here, inside the abort guard *)
+						If[trackedQ,
+							traceRun[codeBlock,settings,OptionValue[DebuggerContexts],OptionValue[TrackedFunctions]],
 							WithSetHandler[
 								codeBlock,
 								setHandler[
@@ -115,14 +116,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 									ContextsRegex -> contextsRegex,
 									ModuleNumbers -> moduleNumbers
 								]&
-							],
-							(* Functions are only rewritten when inputs or locations were asked for. Choosing them scans
-								whole packages, so it runs here, inside the abort guard, rather than before the run *)
-							If[instrumentQ,
-								instrumentationCandidates[OptionValue[DebuggerContexts],OptionValue[InstrumentSymbols]],
-								{}
-							],
-							settings
+							]
 						],
 						{General::stop,Unset::write}
 					],
@@ -145,7 +139,7 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 		Building DebuggerInformation can take a while on a big log; if another abort cuts it short,
 		DebuggerInformation stays a delayed value that finishes the build the next time it is read *)
 	AbortProtect[
-		$lastRun = Association["Sowed" -> reapReturn[[2]],"InstrumentQ" -> instrumentQ];
+		$lastRun = Association["Sowed" -> reapReturn[[2]],"TrackedQ" -> trackedQ];
 		DebuggerInformation := buildDebuggerInformation[];
 	];
 	DebuggerInformation;
@@ -154,16 +148,6 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 
 	(* Throw messages *)
 	Message/@failures;
-
-	If[$rewriteFailures =!= {},
-		Print[
-			Row[{
-				Style["Debugger: ",Bold],
-				"could not instrument ",Length[$rewriteFailures]," function(s); they ran untracked: ",
-				Short[Map[shortName,DeleteDuplicates[$rewriteFailures]],1]
-			}]
-		]
-	];
 
 	Which[
 		(* Say where the run was, then keep the abort going so the call still ends as aborted *)
@@ -179,15 +163,15 @@ Debugger[codeBlock_,OptionsPattern[]]:=Module[
 SetAttributes[Debugger,HoldFirst];
 
 (* The raw Sow stream of the last run, kept until DebuggerInformation has been built from it *)
-$lastRun = Association["Sowed" -> {},"InstrumentQ" -> False];
+$lastRun = Association["Sowed" -> {},"TrackedQ" -> False];
 
 (* Every AssignmentLog entry is {time, variable, Hold[value], location} *)
 buildDebuggerInformation[]:=With[
-	{sowedAssignments = dropRepeatedReports[Lookup[$lastRun["Sowed"],"assignment",{}]]},
+	{sowedAssignments = Lookup[$lastRun["Sowed"],"assignment",{}]},
 	populateDebuggerInformation[
-		If[TrueQ[$lastRun["InstrumentQ"]],
-			pairLocations[sowedAssignments],
-			Map[Append[#,Missing["NotTracked"]]&,sowedAssignments]
+		If[TrueQ[$lastRun["TrackedQ"]],
+			dropRepeatedTraced[sowedAssignments],
+			Map[Append[#,Missing["NotTracked"]]&,dropRepeatedReports[sowedAssignments]]
 		],
 		Lookup[$lastRun["Sowed"],"failure",{}],
 		Lookup[$lastRun["Sowed"],"messageStack",{}]
@@ -195,9 +179,9 @@ buildDebuggerInformation[]:=With[
 ];
 
 (*
-	The set handler can report one Set more than once (twice on 14.2). Duplicates are identical reports of the same
-	runtime symbol (module number included) back to back, so collapse those and drop the raw name. Nested assignments
-	of the same variable name are different Module symbols, and a tracked repeat has its marker in between, so both stay.
+	Untracked runs: the set handler can report one Set more than once (twice on 14.2). Duplicates are identical reports
+	of the same runtime symbol (module number included) back to back, so collapse those and drop the raw name. Nested
+	assignments of the same variable name are different Module symbols, so both stay.
 *)
 dropRepeatedReports[items_List]:=Map[
 	Replace[#,{time_,name_String,value_Hold,_String} :> {time,name,value}]&,
@@ -285,18 +269,10 @@ setHandler[HoldComplete[$$target:($$base:Except[List|Part,_Symbol])[___]],HoldCo
 
 Options[partSetHandler]:=Options[setHandler];
 partSetHandler[HoldComplete[$$target_],HoldComplete[$$base_Symbol],HoldComplete[$$value_],OptionsPattern[]]:=Module[
-	{$$baseString,$$rawString,$$symbolString},
+	{$$rawString,$$symbolString},
 
 	If[StringMatchQ[Context[$$base],RegularExpression[OptionValue[ContextsRegex]]],
-		$$baseString = ToString[Unevaluated[$$base],InputForm];
-		(* the base keeps its context; contexts inside the part spec are dropped to keep the name readable *)
-		$$rawString = StringJoin[
-			$$baseString,
-			StringReplace[
-				StringDrop[ToString[Unevaluated[$$target],InputForm],StringLength[$$baseString]],
-				RegularExpression["[A-Za-z$][A-Za-z0-9$]*`"] -> ""
-			]
-		];
+		$$rawString = partName[$$target,$$base];
 		$$symbolString = If[TrueQ[OptionValue[ModuleNumbers]],
 			$$rawString,
 			StringReplace[$$rawString,RegularExpression["\\$[0-9]+"] -> ""]
@@ -355,41 +331,32 @@ LastDebuggerAssignments[x:All]:=Part["AssignmentLog" /. DebuggerInformation[], A
 
 
 (* ::Section::Closed:: *)
-(*Instrumentation*)
+(*Tracing*)
 
 
 (*
-	TrackInputs and TrackLocations rewrite the DownValues and SubValues of the functions under debug:
-	- pattern inputs are logged from a Condition wrapped around each rule's left-hand side
-	- Function parameters and With constants are logged at the top of their bodies
-	- each Set's value is prefixed with a marker Sow that pairLocations matches to the assignment that follows it
-	Rules are rewritten lazily, on a function's first call, and only live inside the
-	Internal`InheritedBlock in withInstrumentation, so the original definitions come back when Debugger returns.
+	TrackInputs and TrackLocations observe the run with TraceScan; no definition is changed. traceBefore and traceAfter
+	keep a stack of the expressions currently evaluating (frames) and log, as it happens:
+	- a tracked function's inputs, when its definition applies (the call is matched against its DownValues, read only)
+	- Function parameters and With constants, as they are bound
+	- every Set, part/key assignment and mutation (+=, AppendTo, ...), with the function it ran in
+	An entry's location is DebuggerLocation[function, kind, rule, observed form, call]; DebuggerWhere turns it into a
+	file and line only when asked (Locations).
 *)
 
-(* Session state: rewritten rules per function and settings, the location tags that log entries refer to, the
-	functions whose rewrite failed this run, and the source files read to resolve locations *)
-$instrumentCache = Association[];
-$rewriteFailures = {};
-$locationTags = Association[];
-$tagCounter = 0;
+(* Session caches: the source files read to resolve locations *)
 $fileIndexCache = Association[];
 $fileLinesCache = Association[];
 $sourceFilesCache = Association[];
 
 ClearDebuggerCache[]:=(
-	$instrumentCache = Association[];
 	$fileIndexCache = Association[];
 	$fileLinesCache = Association[];
 	$sourceFilesCache = Association[];
 );
 
-(* Placeholder heads hold rebuilt Set/Function/With nodes unevaluated until the whole rule is rebuilt *)
-SetAttributes[{setPH,functionPH,withPH,sequencePH,mutationPH},HoldAllComplete];
-placeholderRules = {setPH -> Set, functionPH -> Function, withPH -> With, sequencePH -> CompoundExpression, mutationPH -> logMutation};
-
-(* Symbol names: symbolString is the form setHandler logs (context omitted when on $ContextPath), fullName always has the context *)
-SetAttributes[{symbolString,symbolContext,fullName,variableInfo,sequencePatternQ},HoldAll];
+(* Symbol names: symbolString is the form the log uses (context omitted when on $ContextPath), fullName always has the context *)
+SetAttributes[{symbolString,symbolContext,fullName,variableInfo,sequencePatternQ,partName},HoldAll];
 symbolString[symbol_Symbol]:=ToString[HoldForm[symbol]];
 symbolContext[symbol_Symbol]:=Context[symbol];
 fullName[symbol_Symbol]:=StringJoin[Context[symbol],SymbolName[Unevaluated[symbol]]];
@@ -400,26 +367,22 @@ shortName[name_String]:=StringReplace[normalizeName[name],RegularExpression["^.*
 (* The variable a log name refers to: "x[[i]]" and "assoc[\"k\"]" belong to x and assoc *)
 baseName[name_String]:=normalizeName[StringReplace[name,RegularExpression["\\[.*$"] -> ""]];
 
+(* The log name of a part or key assignment: the base keeps its context, contexts inside the part spec are dropped *)
+partName[target_,base_Symbol]:=With[
+	{baseString = ToString[Unevaluated[base],InputForm]},
+	StringJoin[
+		baseString,
+		StringReplace[
+			StringDrop[ToString[Unevaluated[target],InputForm],StringLength[baseString]],
+			RegularExpression["[A-Za-z$][A-Za-z0-9$]*`"] -> ""
+		]
+	]
+];
+
 
 (* ::Subsection::Closed:: *)
-(*Choosing and installing*)
+(*Which functions are tracked*)
 
-
-(* Every function in the tracked contexts, plus the public functions of their packages *)
-instrumentationCandidates[contexts_List,Automatic]:=Module[
-	{trackedContexts,names},
-
-	trackedContexts = Select[Contexts[],StringStartsQ[#,Apply[Alternatives,contexts]]&];
-	names = DeleteDuplicates[
-		Join[
-			Flatten[Map[Names[#<>"*"]&,trackedContexts]],
-			Flatten[Map[publicSymbolNames,contexts]]
-		]
-	];
-	Select[heldSymbols[names],instrumentableQ]
-];
-instrumentationCandidates[_,symbols_List]:=Select[heldSymbols[symbols],instrumentableQ];
-instrumentationCandidates[_,_]:={};
 
 (* For "Pkg`Private`", the public symbols of package Pkg`: from Packager when it is loaded, otherwise every symbol in Pkg` *)
 publicSymbolNames[context_String]:=With[
@@ -460,502 +423,420 @@ heldSymbols[items_List]:=Cases[
 	HoldComplete[_Symbol]
 ];
 
-(* Has definitions to rewrite, and is neither Locked nor part of the system or the debugger itself *)
-instrumentableQ[HoldComplete[symbol_Symbol]]:=And[
-	!StringStartsQ[Context[symbol],"Debugger`"|"GeneralUtilities`"|"System`"|"Internal`"],
-	!MemberQ[Attributes[symbol],Locked],
-	Or[DownValues[symbol] =!= {},SubValues[symbol] =!= {}]
+(* Per-run state for deciding which heads are tracked functions; TrackedFunctions -> {f, ...} replaces the automatic choice *)
+trackingSetup[contexts_List,trackedFunctions_]:=(
+	$publicTracked = If[trackedFunctions === Automatic,
+		Association[Map[# -> True&,Flatten[Map[publicSymbolNames,contexts]]]],
+		Association[]
+	];
+	$explicitTracked = If[ListQ[trackedFunctions],
+		Association[Map[# -> True&,heldSymbols[trackedFunctions]]],
+		None
+	];
+	$headCache = Association[];
+	$bindingCache = Association[];
+);
+
+trackedContextQ[context_String]:=StringMatchQ[context,RegularExpression[$contextsRegex]];
+
+(* A head is a tracked function when it has definitions and is in a tracked context, a tracked package's public symbol, or listed *)
+SetAttributes[{trackedFunctionQ,computeTrackedFunctionQ},HoldAll];
+trackedFunctionQ[head_Symbol]:=Replace[
+	$headCache[HoldComplete[head]],
+	_Missing :> ($headCache[HoldComplete[head]] = computeTrackedFunctionQ[head])
 ];
-instrumentableQ[_]:=False;
-
-(* Every instrumented symbol is InheritedBlock-ed, so stubs and rewritten rules are reverted on exit *)
-SetAttributes[withInstrumentation,HoldFirst];
-withInstrumentation[body_,{},_]:=body;
-withInstrumentation[body_,symbols:{__HoldComplete},settings_Association]:=Replace[
-	Apply[Join,symbols],
-	HoldComplete[syms___] :> Internal`InheritedBlock[
-		{syms},
-		Quiet[Scan[installInstrumentation[#,settings]&,symbols]];
-		body
-	]
-];
-
-(* A rewrite depends on the function, the tracked contexts and which of TrackInputs/TrackLocations is on *)
-cacheKey[name_String,settings_Association]:={
-	name,
-	settings["ContextsRegex"],
-	settings["TrackInputs"],
-	settings["TrackLocations"]
-};
-
-cacheValidQ[HoldComplete[symbol_Symbol],cached_Association]:=And[
-	DownValues[symbol] === cached["OriginalDownValues"],
-	SubValues[symbol] === cached["OriginalSubValues"]
-];
-cacheValidQ[_,_]:=False;
-
-(* Reuse a cached rewrite when the definitions have not changed; otherwise rewrite on first call *)
-installInstrumentation[held:HoldComplete[symbol_Symbol],settings_Association]:=Module[
-	{cached},
-
-	cached = Lookup[$instrumentCache,Key[cacheKey[fullName[symbol],settings]],None];
-	Which[
-		!cacheValidQ[held,cached],
-			Unprotect[symbol];
-			DownValues[symbol] = Prepend[DownValues[symbol],stubRule[held,settings]],
-		TrueQ[cached["Unchanged"]],
-			If[TrueQ[cached["Failed"]],
-				$rewriteFailures = Append[$rewriteFailures,fullName[symbol]]
-			],
-		True,
-			Unprotect[symbol];
-			DownValues[symbol] = cached["DownValues"];
-			If[cached["SubValues"] =!= cached["OriginalSubValues"],
-				SubValues[symbol] = cached["SubValues"]
-			]
-	]
-];
-
-(* The stub rewrites the real rules, drops itself, and re-evaluates the call against the rewritten rules *)
-stubRule[held:HoldComplete[symbol_Symbol],settings_Association]:=With[
-	{heldSymbol = held,instrumentSettings = settings},
-	HoldPattern[symbol[arguments___]] :> (instrumentNow[heldSymbol,instrumentSettings]; symbol[arguments])
-];
-
-(* Rewrites the function's rules (without the stub), installs them and caches the result *)
-instrumentNow[HoldComplete[symbol_Symbol],settings_Association]:=Quiet[
-	Module[
-		{name,originalDownValues,originalSubValues,newDownValues,newSubValues,failedQ},
-
-		name = fullName[symbol];
-		originalDownValues = DeleteCases[
-			DownValues[symbol],
-			Verbatim[RuleDelayed][_,Verbatim[CompoundExpression][_instrumentNow,_]]
-		];
-		originalSubValues = SubValues[symbol];
-
-		(* Any message while rewriting means the original rules are used, except informational ones (a built-in creating a
-			symbol on first use). The list is written out because Quiet holds its arguments *)
-		newDownValues = Check[Quiet[instrumentRules[name,originalDownValues,settings],{General::newsym,General::shdw}],$Failed];
-		newSubValues = Check[Quiet[instrumentRules[name,originalSubValues,settings],{General::newsym,General::shdw}],$Failed];
-		failedQ = Or[newDownValues === $Failed,newSubValues === $Failed];
-		If[failedQ,
-			newDownValues = originalDownValues;
-			newSubValues = originalSubValues;
-			$rewriteFailures = Append[$rewriteFailures,name]
-		];
-
-		Unprotect[symbol];
-		DownValues[symbol] = newDownValues;
-		If[newSubValues =!= originalSubValues,
-			SubValues[symbol] = newSubValues
-		];
-
-		$instrumentCache[cacheKey[name,settings]] = Association[
-			"OriginalDownValues" -> originalDownValues,
-			"OriginalSubValues" -> originalSubValues,
-			"DownValues" -> newDownValues,
-			"SubValues" -> newSubValues,
-			"Unchanged" -> And[newDownValues === originalDownValues,newSubValues === originalSubValues],
-			"Failed" -> failedQ
-		];
+computeTrackedFunctionQ[head_Symbol]:=And[
+	!StringStartsQ[Context[head],"Debugger`"|"System`"],
+	DownValues[head] =!= {},
+	If[$explicitTracked === None,
+		Or[trackedContextQ[Context[head]],KeyExistsQ[$publicTracked,fullName[head]]],
+		KeyExistsQ[$explicitTracked,HoldComplete[head]]
 	]
 ];
 
 
 (* ::Subsection::Closed:: *)
-(*Rewriting rules*)
+(*Observing the run*)
 
 
-instrumentRules[functionName_String,rules_List,settings_Association]:=MapIndexed[
-	instrumentRule[#1,First[#2],functionName,settings]&,
-	rules
+(* Evaluates body under TraceScan with fresh per-run state *)
+SetAttributes[traceRun,HoldFirst];
+traceRun[body_,settings_Association,contexts_List,trackedFunctions_]:=Block[
+	{
+		$contextsRegex = settings["ContextsRegex"],
+		$trackInputs = settings["TrackInputs"],
+		$moduleNumbers = settings["ModuleNumbers"],
+		$frames = {},
+		$frameCounter = 0,
+		$pendingCalls = Association[],
+		$functionStack = {},
+		$withState = Association[],
+		$callCounter = 0,
+		$publicTracked,
+		$explicitTracked,
+		$headCache,
+		$bindingCache
+	},
+	trackingSetup[contexts,trackedFunctions];
+	TraceScan[traceBefore,body,_,traceAfter]
 ];
 
-(* A tag describes one rewritten node (function, kind, variables, ordinals); log entries carry only its id *)
-registerTag[tag_Association]:=(
-	$tagCounter = $tagCounter + 1;
-	$locationTags[$tagCounter] = tag;
-	$tagCounter
+(*
+	Frames are {id, event, kind, parent id}, kept as a linked list {frame, rest} so a push or pop is one assignment.
+	kind is "Call" (a tracked function), "PureCall" (a Function applied), "With", "Set", "Mutation" or None.
+*)
+$eventKindRules = {
+	HoldForm[_Set] -> "Set",
+	HoldForm[(AddTo|SubtractFrom|TimesBy|DivideBy|Increment|Decrement|PreIncrement|PreDecrement|AppendTo|PrependTo|AssociateTo|KeyDropFrom)[_,___]] -> "Mutation",
+	HoldForm[With[_List,_]] -> "With",
+	HoldForm[(_Function)[___]] -> "PureCall",
+	HoldForm[(head_Symbol)[___]] :> If[trackedFunctionQ[head],"Call",None],
+	_ -> None
+};
+
+topFrame[]:=If[$frames === {},None,First[$frames]];
+
+(* Before each step: settle a call waiting to see whether its definition applied, then push the step *)
+traceBefore[event_]:=With[
+	{parent = topFrame[]},
+	If[And[parent =!= None,KeyExistsQ[$pendingCalls,First[parent]]],
+		Quiet[settleCall[parent,event]]
+	];
+	pushFrame[event,Replace[event,$eventKindRules],If[parent === None,0,First[parent]]]
+];
+
+pushFrame[event_,kind_,parentId_Integer]:=(
+	$frameCounter = $frameCounter+1;
+	$frames = {{$frameCounter,event,kind,parentId},$frames};
+	Which[
+		MatchQ[kind,"Call"|"PureCall"],$pendingCalls[$frameCounter] = True,
+		kind === "With",Quiet[startWith[$frameCounter,event]]
+	];
+);
+
+(* After each step: pop its frame (and any frame a Throw or Abort skipped) and log what the step did. Only the logging
+	is Quieted: a message there would otherwise reach the message handler and stop the run *)
+SetAttributes[traceAfter,HoldAllComplete];
+traceAfter[event_,result_]:=With[
+	{frame = popFrame[event]},
+	If[frame =!= None,
+		finishFrame[frame,HoldComplete[result]]
+	]
+];
+
+popFrame[event_]:=If[And[$frames =!= {},$frames[[1,2]] === event],
+	With[{frame = $frames[[1]]},
+		$frames = $frames[[2]];
+		frame
+	],
+	unwindTo[event]
+];
+
+(* The frame is deeper in the stack when steps above it never reported back; drop those. A frame never pushed is ignored *)
+unwindTo[event_]:=Module[
+	{rest = $frames,found = False},
+	While[And[rest =!= {},!found],
+		found = rest[[1,2]] === event;
+		If[!found,rest = rest[[2]]]
+	];
+	If[found,
+		While[$frames[[1,2]] =!= event,
+			finishFrame[$frames[[1]],None];
+			$frames = $frames[[2]]
+		];
+		popFrame[event],
+		None
+	]
+];
+
+finishFrame[{id_,event_,kind_,parentId_},result_]:=(
+	If[KeyExistsQ[$pendingCalls,id],$pendingCalls = KeyDrop[$pendingCalls,id]];
+	If[And[$functionStack =!= {},$functionStack[[1,1]] === id],$functionStack = $functionStack[[2]]];
+	If[result =!= None,
+		Which[
+			kind === "Set",If[!innerSetQ[event],Quiet[logSet[event,result]]],
+			kind === "Mutation",Quiet[logMutationEvent[event]],
+			kind === "With",$withState = KeyDrop[$withState,id]
+		];
+		If[KeyExistsQ[$withState,parentId],Quiet[withChildDone[parentId,result]]]
+	];
 );
 
 (*
-	Rewrites one rule. Tags record what DebuggerWhere needs to find the source line again:
-	the function, the rule's pattern names (to pick the overload) and, per variable, the ordinal of
-	this node among the rule's Set (or Function) nodes binding that variable, in source order.
+	A call's definition has applied once its first child step is neither its head nor one of its arguments.
+	A child with the same head is the same call again with its arguments evaluated, which settles in turn.
 *)
-instrumentRule[rule_RuleDelayed,ruleIndex_Integer,functionName_String,settings_Association]:=Module[
-	{
-		held,trackedQ,rhsQ,blockedPositions,allowedQ,patternInfo,patternNames,setPositions,functionPositions,
-		withPositions,setVariables,functionVariables,setOrdinals,functionOrdinals,setOrdinalLookup,
-		mutationPositions,mutationVariables,mutationOrdinals,
-		setEdits,functionEdits,withEdits,patternEdits,mutationEdits,edits
-	},
+settleCall[{id_,call_,kind_,_},child_]:=If[!headOrArgumentQ[call,child],
+	$pendingCalls = KeyDrop[$pendingCalls,id];
+	If[!sameHeadQ[call,child],
+		applied[id,call,kind]
+	]
+];
 
-	held = HoldComplete[rule];
-	trackedQ = StringMatchQ[#,RegularExpression[settings["ContextsRegex"]]]&;
+headOrArgumentQ[call_HoldForm,child_HoldForm]:=Or[
+	child === Extract[call,{1,0},HoldForm],
+	AnyTrue[Cases[call,argument_ :> HoldForm[argument],{2}],# === child&]
+];
 
-	(* Only the right-hand side is rewritten, and never inside held, compiled or verbatim code *)
-	rhsQ = MatchQ[#,{1,2,___}]&;
-	blockedPositions = Select[
-		Position[held,_Hold|_HoldComplete|_HoldForm|_HoldPattern|_Defer|_Inactive|_Compile|_FunctionCompile|_Verbatim],
-		rhsQ
-	];
-	allowedQ = Function[position,
-		And[
-			rhsQ[position],
-			NoneTrue[blockedPositions,prefixQ[#,position]&]
-		]
-	];
+sameHeadQ[call_HoldForm,child_HoldForm]:=Extract[call,{1,0},HoldForm] === Extract[child,{1,0},HoldForm];
 
-	patternInfo = DeleteDuplicatesBy[
-		Cases[
-			Extract[held,{1,1},HoldComplete],
-			Verbatim[Pattern][symbol_Symbol,pattern_] :> Association[
-				"Name" -> normalizeName[symbolString[symbol]],
-				"Context" -> symbolContext[symbol],
-				"Held" -> If[sequencePatternQ[pattern],HoldComplete[{symbol}],HoldComplete[symbol]]
-			],
-			{0,Infinity},
-			Heads -> True
-		],
-		Lookup["Name"]
-	];
-	patternNames = DeleteDuplicates[Map[shortName,Lookup[patternInfo,"Name",{}]]];
-
-	setPositions = preOrder[Select[Position[held,Verbatim[Set][_Symbol|{__Symbol},_]],rhsQ]];
-	functionPositions = preOrder[Select[Position[held,Verbatim[Function][Except[Null,_Symbol]|{__Symbol},__]],rhsQ]];
-	withPositions = preOrder[Select[Position[held,Verbatim[With][_List,_]],rhsQ]];
-
-	(* Changes to part of a variable or by an operator (x[[i]] = v, AppendTo, +=, ++, AssociateTo, ...) *)
-	mutationPositions = Select[
-		preOrder[Select[Position[held,$mutationHeads[_,___]],rhsQ]],
-		mutationInfo[Extract[held,#,HoldComplete]] =!= None&
-	];
-	mutationVariables = Map[{mutationInfo[Extract[held,#,HoldComplete]]}&,mutationPositions];
-	mutationOrdinals = ordinals[mutationVariables];
-
-	setVariables = Map[heldVariables[Extract[held,#,HoldComplete]]&,setPositions];
-	functionVariables = Map[heldVariables[Extract[held,#,HoldComplete]]&,functionPositions];
-	setOrdinals = ordinals[setVariables];
-	functionOrdinals = ordinals[functionVariables];
-	setOrdinalLookup = AssociationThread[setPositions,setOrdinals];
-
-	(*
-		Set: "x = (Sow[marker]; value)". A plain CompoundExpression leaves Return/Sequence values exactly as they were.
-		Module/Block initializers are never reported by the set handler, so they log themselves instead:
-		"a = logAssigned[tag, \"a\", value]"
-	*)
-	setEdits = MapThread[
-		Function[{position,variables,ordinal},
-			With[
-				{
-					tag = Association[
-						"Function" -> functionName,
-						"Rule" -> ruleIndex,
-						"Kind" -> "Set",
-						"Variables" -> Lookup[variables,"Name"],
-						"Ordinals" -> ordinal,
-						"PatternNames" -> patternNames
-					]
-				},
-				Which[
-					Or[!allowedQ[position],withInitializerQ[held,position],!AnyTrue[Lookup[variables,"Context"],trackedQ]],
-						Nothing,
-					scopeInitializerQ[held,position],
-						setEdit[position,tag,"Initializer"],
-					settings["TrackLocations"],
-						setEdit[position,tag,"Marker"],
-					True,
-						Nothing
-				]
-			]
-		],
-		{setPositions,setVariables,setOrdinals}
-	];
-
-	(* Function: log the parameters first thing in the body *)
-	functionEdits = If[settings["TrackInputs"],
-		MapThread[
-			Function[{position,variables,ordinal},
-				With[{tracked = Select[variables,trackedQ[#["Context"]]&]},
-					If[And[allowedQ[position],tracked =!= {}],
-						With[
-							{
-								tagId = registerTag[Association[
-									"Function" -> functionName,
-									"Rule" -> ruleIndex,
-									"Kind" -> "Function",
-									"Variables" -> Lookup[tracked,"Name"],
-									"Ordinals" -> ordinal,
-									"PatternNames" -> patternNames
-								]],
-								names = Lookup[tracked,"Name"],
-								values = Apply[Join,Lookup[tracked,"Held"]]
-							},
-							{
-								position,
-								Function[node,
-									Replace[node,
-										HoldComplete[Verbatim[Function][parameters_,body_,rest___]] :> functionPH[parameters,CompoundExpression[logInputs[tagId,names,values],body],rest]
-									]
-								]
-							}
-						],
-						Nothing
-					]
-				]
-			],
-			{functionPositions,functionVariables,functionOrdinals}
-		],
-		{}
-	];
-
-	(* With: log the constants at the top of the body (inside a trailing Condition, so the idiom still works) *)
-	withEdits = If[settings["TrackInputs"],
-		Map[
-			Function[position,
-				With[
-					{
-						tracked = Select[heldVariables[Extract[held,position,HoldComplete]],trackedQ[#["Context"]]&],
-						initializerOrdinals = Association[
-							Map[
-								Lookup[setOrdinalLookup,Key[#],Association[]]&,
-								Select[setPositions,And[Length[#] === Length[position]+2,Take[#,Length[position]] === position,#[[-2]] === 1]&]
-							]
-						]
-					},
-					If[And[allowedQ[position],tracked =!= {}],
-						With[
-							{
-								tagId = registerTag[Association[
-									"Function" -> functionName,
-									"Rule" -> ruleIndex,
-									"Kind" -> "With",
-									"Variables" -> Lookup[tracked,"Name"],
-									"Ordinals" -> initializerOrdinals,
-									"PatternNames" -> patternNames
-								]],
-								names = Lookup[tracked,"Name"],
-								values = Apply[Join,Lookup[tracked,"Held"]]
-							},
-							{
-								position,
-								Function[node,
-									Replace[
-										{node,injectHeld[Extract[node,{1,2},HoldComplete],HoldComplete[logInputs[tagId,names,values]]]},
-										{HoldComplete[Verbatim[With][variables_,_]],HoldComplete[newBody_]} :> withPH[variables,newBody]
-									]
-								]
-							}
-						],
-						Nothing
-					]
-				]
-			],
-			withPositions
-		],
-		{}
-	];
-
-	(* Pattern inputs: a Condition around the whole left-hand side runs only once the rule has matched *)
-	patternEdits = With[{tracked = Select[patternInfo,trackedQ[#["Context"]]&]},
-		If[Or[!settings["TrackInputs"],tracked === {}],
-			{},
-			With[
-				{
-					tagId = registerTag[Association[
-						"Function" -> functionName,
-						"Rule" -> ruleIndex,
-						"Kind" -> "Pattern",
-						"Variables" -> Lookup[tracked,"Name"],
-						"Ordinals" -> Association[],
-						"PatternNames" -> patternNames
-					]],
-					names = Lookup[tracked,"Name"],
-					values = Apply[Join,Lookup[tracked,"Held"]]
-				},
-				{{
-					{1,1},
-					Function[node,
-						Replace[node,
-							HoldComplete[Verbatim[HoldPattern][lhs_]] :> HoldPattern[Condition[lhs,CompoundExpression[logInputs[tagId,names,values],True]]]
-						]
-					]
-				}}
-			]
-		]
-	];
-
-	(*
-		Mutations the set handler reports (x[[i]] = v, assoc["k"] = v, AppendTo, PrependTo) get a marker, like a Set.
-		The ones it never reports (+=, ++, AssociateTo, KeyDropFrom, ...) log the variable's new value themselves.
-	*)
-	mutationEdits = MapThread[
-		Function[{position,variables,ordinal},
-			With[
-				{
-					info = First[variables],
-					tag = Association[
-						"Function" -> functionName,
-						"Rule" -> ruleIndex,
-						"Kind" -> "Mutation",
-						"Variables" -> Lookup[variables,"Name"],
-						"Ordinals" -> ordinal,
-						"PatternNames" -> patternNames
-					]
-				},
-				Which[
-					Or[!allowedQ[position],!trackedQ[info["Context"]]],
-						Nothing,
-					info["Reported"],
-						If[settings["TrackLocations"],mutationEdit[position,tag,"Marker",info],Nothing],
-					True,
-						mutationEdit[position,tag,"Log",info]
-				]
-			]
-		],
-		{mutationPositions,mutationVariables,mutationOrdinals}
-	];
-
-	edits = Join[setEdits,functionEdits,withEdits,patternEdits,mutationEdits];
-
-	If[edits === {},
-		rule,
-		(* Deepest first, so a node is rebuilt from children that were already rewritten *)
-		First[
-			ReplaceAll[
-				Fold[
-					applyEdit,
-					held,
-					SortBy[edits,-Length[First[#]]&]
-				],
-				placeholderRules
+(* A tracked function's definition applied: it becomes the function later entries are attributed to, and its inputs are logged *)
+applied[id_,call_,"Call"]:=With[
+	{binding = bindCall[call]},
+	If[AssociationQ[binding],
+		$callCounter = $callCounter+1;
+		$functionStack = {{id,binding["Function"],binding["Rule"]},$functionStack};
+		If[$trackInputs,
+			logBound[
+				binding["Names"],
+				binding["Values"],
+				DebuggerLocation[binding["Function"],"Pattern",binding["Rule"],None,$callCounter]
 			]
 		]
 	]
 ];
-instrumentRule[other_,___]:=other;
+applied[_,call_,"PureCall"]:=If[$trackInputs,
+	With[{bound = pureFunctionBinding[call]},
+		If[ListQ[bound],
+			logBound[bound[[1]],bound[[2]],currentLocation["Function",bound[[3]]]]
+		]
+	]
+];
+
+(* The function the run is in, for attributing an entry; None outside every tracked function *)
+currentLocation[kind_String,observed_]:=If[$functionStack === {},
+	DebuggerLocation[None,kind,None,observed,None],
+	DebuggerLocation[$functionStack[[1,2]],kind,$functionStack[[1,3]],observed,None]
+];
+
+logName[raw_String]:=If[TrueQ[$moduleNumbers],raw,StringReplace[raw,RegularExpression["\\$[0-9]+"] -> ""]];
+
+(* Entries are {time, name, Hold[value], location, raw name}; the raw name only serves to drop repeats *)
+logBound[names_List,HoldComplete[values___],location_]:=With[
+	{time = UnixTime[],held = Apply[List,Map[Hold,HoldComplete[values]]]},
+	If[Length[held] === Length[names],
+		MapThread[Sow[{time,#1,#2,location,#1},"assignment"]&,{names,held}]
+	];
+];
+
+
+(* ::Subsection::Closed:: *)
+(*Inputs*)
+
+
+(* The rule a call matches and its tracked inputs, matched against the function's DownValues once per function per run *)
+bindCall[HoldForm[call:(head_Symbol)[___]]]:=With[
+	{binding = bindingFor[head]},
+	Replace[
+		Replace[HoldComplete[call],binding["Rules"]],
+		{
+			{index_Integer,values_HoldComplete} :> Association[
+				"Function" -> binding["Function"],
+				"Rule" -> binding["Held"][[index]],
+				"Names" -> binding["Names"][[index]],
+				"Values" -> values
+			],
+			_ -> None
+		}
+	]
+];
+bindCall[_]:=None;
+
+SetAttributes[{bindingFor,buildBinding},HoldAll];
+bindingFor[head_Symbol]:=Replace[
+	$bindingCache[HoldComplete[head]],
+	_Missing :> ($bindingCache[HoldComplete[head]] = buildBinding[head])
+];
+
+(* Rules without patterns (memoized values) bind nothing and are left out *)
+buildBinding[head_Symbol]:=Module[
+	{held,infos,tracked},
+	held = Map[HoldComplete,Select[DownValues[head],!FreeQ[#,Verbatim[Pattern]]&]];
+	infos = Map[patternInfo,held];
+	tracked = Map[Select[#,trackedContextQ[#["Context"]]&]&,infos];
+	Association[
+		"Function" -> fullName[head],
+		"Held" -> held,
+		"Names" -> Map[Lookup[#,"Name",{}]&,tracked],
+		"Rules" -> MapThread[bindingRule,{held,tracked,Range[Length[held]]}]
+	]
+];
+
+(* HoldComplete[lhs] :> {index, HoldComplete[inputs...]}, built with Apply so no scoping construct renames the pattern names *)
+bindingRule[HoldComplete[Verbatim[RuleDelayed][lhs_,_]],tracked_List,index_Integer]:=Apply[
+	RuleDelayed,
+	{HoldComplete[lhs],{index,heldValues[tracked]}}
+];
+
+heldValues[{}]:=HoldComplete[];
+heldValues[tracked_List]:=Apply[Join,Lookup[tracked,"Held"]];
+
+(* The pattern variables of a rule's left-hand side: log name, context, and the symbol held (a list for sequence patterns) *)
+patternInfo[held_HoldComplete]:=DeleteDuplicatesBy[
+	Cases[
+		Extract[held,{1,1},HoldComplete],
+		Verbatim[Pattern][symbol_Symbol,pattern_] :> Association[
+			"Name" -> normalizeName[symbolString[symbol]],
+			"Context" -> symbolContext[symbol],
+			"Held" -> If[sequencePatternQ[pattern],HoldComplete[{symbol}],HoldComplete[symbol]]
+		],
+		{0,Infinity},
+		Heads -> True
+	],
+	Lookup["Name"]
+];
+
+(* Sequence patterns (x__, opts:OptionsPattern[]) are logged as a list of what they matched *)
+sequencePatternQ[(Verbatim[PatternTest]|Verbatim[Condition])[pattern_,_]]:=sequencePatternQ[pattern];
+sequencePatternQ[_BlankSequence|_BlankNullSequence|_OptionsPattern|_Repeated|_RepeatedNull]:=True;
+sequencePatternQ[_]:=False;
+
+(* {names, HoldComplete[values], observed Function} for the tracked parameters of an applied Function; slot functions have none *)
+pureFunctionBinding[HoldForm[(function:Function[parameters:(Except[Null,_Symbol]|{___Symbol}),__])[arguments___]]]:=Module[
+	{infos,positions},
+	infos = parameterInfo[HoldComplete[parameters]];
+	positions = Select[
+		Flatten[Position[Map[trackedContextQ[#["Context"]]&,infos],True]],
+		# <= Length[HoldComplete[arguments]]&
+	];
+	If[positions === {},
+		None,
+		{infos[[positions,"Name"]],HoldComplete[arguments][[positions]],HoldComplete[function]}
+	]
+];
+pureFunctionBinding[_]:=None;
+
+parameterInfo[HoldComplete[symbol_Symbol]]:={variableInfo[symbol]};
+parameterInfo[HoldComplete[symbols:{___Symbol}]]:=Cases[HoldComplete[symbols],symbol_Symbol :> variableInfo[symbol],{2}];
+
+(* A bound symbol's log name, its context (to check tracking) and the symbol, held *)
+variableInfo[symbol_Symbol]:=Association[
+	"Name" -> normalizeName[symbolString[symbol]],
+	"Context" -> symbolContext[symbol],
+	"Held" -> HoldComplete[symbol]
+];
 
 (*
-	A named function on purpose: a pure Function with a With inside would have that With substitute into the
-	edit's own builder Function (whose parameter shares the With variable's name) and break it
+	With constants: a With step's direct children are its head, then one step per initializer value, then the body,
+	so the 2nd..(n+1)th child to finish carries the value of the 1st..nth constant
 *)
-applyEdit[current_HoldComplete,{position_List,builder_}]:=With[
-	{rebuilt = builder[Extract[current,position,HoldComplete]]},
-	(* An edit whose shape no longer matched comes back still wrapped; leave that node alone *)
-	If[MatchQ[rebuilt,_HoldComplete],current,ReplacePart[current,position -> rebuilt]]
+startWith[id_,event:HoldForm[With[variables_List,_]]]:=$withState[id] = {
+	Cases[HoldComplete[variables],Verbatim[Set][symbol_Symbol,_] :> variableInfo[symbol],{2}],
+	0,
+	Apply[HoldComplete,event]
+};
+
+withChildDone[withId_,HoldComplete[value_]]:=Module[
+	{infos,count,observed},
+	{infos,count,observed} = $withState[withId];
+	count = count+1;
+	$withState[withId] = {infos,count,observed};
+	If[And[$trackInputs,2 <= count <= Length[infos]+1,trackedContextQ[infos[[count-1,"Context"]]]],
+		Sow[
+			{UnixTime[],infos[[count-1,"Name"]],Hold[value],currentLocation["With",observed],infos[[count-1,"Name"]]},
+			"assignment"
+		]
+	]
 ];
 
-(* position is inside the node at prefix *)
-prefixQ[prefix_List,position_List]:=And[
-	Length[prefix] <= Length[position],
-	Take[position,Length[prefix]] === prefix
+
+(* ::Subsection::Closed:: *)
+(*Assignments*)
+
+
+(* A Set's own evaluation shows up twice (as written, then with its value): only the outer one is logged *)
+innerSetQ[HoldForm[Verbatim[Set][lhs_,_]]]:=And[
+	$frames =!= {},
+	$frames[[1,3]] === "Set",
+	Extract[$frames[[1,2]],{1,1},HoldComplete] === HoldComplete[lhs]
 ];
+innerSetQ[_]:=False;
+
+(* The Set as written, with Module's Unevaluated[...] around an initializer value removed, for matching against source *)
+observedSet[event_HoldForm]:=Replace[
+	Apply[HoldComplete,event],
+	HoldComplete[Verbatim[Set][lhs_,Verbatim[Unevaluated][rhs_]]] :> HoldComplete[Set[lhs,rhs]]
+];
+
+logSet[event:HoldForm[Verbatim[Set][lhs_,_]],HoldComplete[value_]]:=logAssignment[HoldComplete[lhs],HoldComplete[value],observedSet[event]];
+
+logAssignment[HoldComplete[symbol_Symbol],HoldComplete[value_],observed_]:=If[trackedContextQ[Context[symbol]],
+	With[{raw = ToString[HoldForm[symbol]]},
+		Sow[{UnixTime[],logName[raw],Hold[value],currentLocation["Set",observed],raw},"assignment"]
+	]
+];
+logAssignment[HoldComplete[symbols:{___Symbol}],HoldComplete[values_List],observed_]:=Do[
+	logAssignment[Extract[HoldComplete[symbols],{1,index},HoldComplete],Extract[HoldComplete[values],{1,index},HoldComplete],observed],
+	{index,Min[Length[Unevaluated[symbols]],Length[values]]}
+];
+(*
+	Assignments into part of a variable: x[[i]] = v, and assoc["k"] = v when assoc holds an Association, logged as
+	x[[i]] / assoc["k"]. s[...] = v on a symbol without an Association value is a definition (e.g. memoization), not a variable.
+*)
+logAssignment[HoldComplete[target:Verbatim[Part][base_Symbol,___]],HoldComplete[value_],observed_]/;OwnValues[base] =!= {}:=
+	logPartAssignment[HoldComplete[target],HoldComplete[base],HoldComplete[value],observed];
+logAssignment[HoldComplete[target:(base:Except[List|Part,_Symbol])[___]],HoldComplete[value_],observed_]/;MatchQ[OwnValues[base],{_ :> _Association}]:=
+	logPartAssignment[HoldComplete[target],HoldComplete[base],HoldComplete[value],observed];
+logAssignment[___]:=Null;
+
+logPartAssignment[HoldComplete[target_],HoldComplete[base_Symbol],HoldComplete[value_],observed_]:=If[trackedContextQ[Context[base]],
+	With[{raw = partName[target,base]},
+		Sow[{UnixTime[],logName[raw],Hold[value],currentLocation["Mutation",observed],raw},"assignment"]
+	]
+];
+
+(* +=, ++, AppendTo, AssociateTo, ...: log the variable's whole new value *)
+logMutationEvent[event:HoldForm[_[target_,___]]]:=mutationTarget[HoldComplete[target],Apply[HoldComplete,event]];
+
+mutationTarget[HoldComplete[symbol_Symbol],observed_]:=logMutationValue[HoldComplete[symbol],observed];
+mutationTarget[HoldComplete[Verbatim[Part][symbol_Symbol,___]],observed_]:=logMutationValue[HoldComplete[symbol],observed];
+mutationTarget[HoldComplete[(symbol:Except[List|Part,_Symbol])[___]],observed_]/;MatchQ[OwnValues[symbol],{_ :> _Association}]:=
+	logMutationValue[HoldComplete[symbol],observed];
+mutationTarget[___]:=Null;
+
+logMutationValue[HoldComplete[symbol_Symbol],observed_]:=If[trackedContextQ[Context[symbol]],
+	With[{raw = ToString[HoldForm[symbol]]},
+		Sow[{UnixTime[],logName[raw],Hold[Evaluate[symbol]],currentLocation["Mutation",observed],raw},"assignment"]
+	]
+];
+
+(*
+	Drops repeated reports of one assignment (the same runtime symbol and value back to back, e.g. AppendTo seen both as
+	itself and as the Set it performs), keeping the last, then the raw name. Inputs are never merged.
+*)
+dropRepeatedTraced[items_List]:=Map[
+	Take[#,4]&,
+	Map[
+		Last,
+		Split[
+			items,
+			And[
+				MatchQ[#1,{_,_,_,DebuggerLocation[_,"Set"|"Mutation",___],_}],
+				MatchQ[#2,{_,_,_,DebuggerLocation[_,"Set"|"Mutation",___],_}],
+				#1[[{3,5}]] === #2[[{3,5}]]
+			]&
+		]
+	]
+];
+
+(* Shown in the log as <<function Kind>> *)
+Format[DebuggerLocation[function_,kind_String,___]]:=Row[{
+	"\[LeftSkeleton]",
+	If[StringQ[function],shortName[function],"\[LongDash]"],
+	" ",
+	kind,
+	"\[RightSkeleton]"
+}];
+
+
+(* ::Subsection::Closed:: *)
+(*Source nodes*)
+
 
 (* Positions in source order: a parent before its children, left before right *)
 preOrder[positions_List]:=With[
 	{depth = Max[0,Map[Length,positions]]},
 	SortBy[positions,PadRight[#,depth,-1]&]
-];
-
-(* Edits are {position, builder}: the builder takes the node there, held, and returns its replacement *)
-setEdit[position_List,tag_Association,"Marker"]:=With[
-	{tagId = registerTag[tag]},
-	{
-		position,
-		Function[node,
-			Replace[node,
-				HoldComplete[Verbatim[Set][lhs_,rhs_]] :> setPH[lhs,CompoundExpression[Sow[setMarker[tagId],"assignment"],rhs]]
-			]
-		]
-	}
-];
-setEdit[position_List,tag_Association,"Initializer"]:=With[
-	{tagId = registerTag[tag],name = First[tag["Variables"]]},
-	{
-		position,
-		Function[node,
-			Replace[node,
-				HoldComplete[Verbatim[Set][lhs_,rhs_]] :> setPH[lhs,logAssigned[tagId,name,rhs]]
-			]
-		]
-	}
-];
-
-(* A marker for mutations the set handler reports; logMutation for the ones it does not *)
-mutationEdit[position_List,tag_Association,"Marker",_]:=With[
-	{tagId = registerTag[tag]},
-	{
-		position,
-		Function[node,
-			Replace[node,HoldComplete[mutation_] :> sequencePH[Sow[setMarker[tagId],"assignment"],mutation]]
-		]
-	}
-];
-mutationEdit[position_List,tag_Association,"Log",info_Association]:=With[
-	{tagId = registerTag[tag],name = info["Name"],baseHeld = info["Held"]},
-	{
-		position,
-		Function[node,
-			Replace[{node,baseHeld},{HoldComplete[mutation_],HoldComplete[base_]} :> mutationPH[tagId,name,mutation,base]]
-		]
-	}
-];
-
-(* Operator forms the set handler never reports; AppendTo/PrependTo and part assignments it does report *)
-$mutationHeads = Set|AddTo|SubtractFrom|TimesBy|DivideBy|Increment|Decrement|PreIncrement|PreDecrement|AssociateTo|KeyDropFrom|AppendTo|PrependTo;
-
-(* The variable a mutation changes, or None. Set with a plain symbol on the left is an ordinary Set, not a mutation. *)
-mutationInfo[HoldComplete[Verbatim[Set][target_,_]]]:=mutationBase[HoldComplete[target],True,False];
-mutationInfo[HoldComplete[(AppendTo|PrependTo)[target_,___]]]:=mutationBase[HoldComplete[target],True,True];
-mutationInfo[HoldComplete[_[target_,___]]]:=mutationBase[HoldComplete[target],False,True];
-mutationInfo[_]:=None;
-
-(* mutationBase[target, reportedQ, plainSymbolQ]: the variable that target (x, x[[i]] or x[key]) changes; a bare x counts only when plainSymbolQ *)
-mutationBase[HoldComplete[symbol_Symbol],reportedQ_,True]:=Append[variableInfo[symbol],"Reported" -> reportedQ];
-mutationBase[HoldComplete[Verbatim[Part][symbol_Symbol,___]],reportedQ_,_]:=Append[variableInfo[symbol],"Reported" -> reportedQ];
-(* symbol[key]: a variable holding an Association, never a function (a symbol with definitions, e.g. memoization) *)
-mutationBase[HoldComplete[(symbol:Except[List|Part,_Symbol])[___]],reportedQ_,_]/;DownValues[symbol] === {}:=Append[variableInfo[symbol],"Reported" -> reportedQ];
-mutationBase[___]:=None;
-
-(* The Set at position initializes a Module/Block variable (scopeInitializerQ) or a With constant (withInitializerQ) *)
-scopeInitializerQ[held_,position_List]:=And[
-	Length[position] >= 2,
-	position[[-2]] === 1,
-	MatchQ[Extract[held,Drop[position,-2],HoldComplete],HoldComplete[(Module|Block)[_List,_]]]
-];
-
-withInitializerQ[held_,position_List]:=And[
-	Length[position] >= 2,
-	position[[-2]] === 1,
-	MatchQ[Extract[held,Drop[position,-2],HoldComplete],HoldComplete[Verbatim[With][_List,_]]]
-];
-
-(* Running count of each variable over the nodes, in source order *)
-ordinals[variableLists_List]:=Module[
-	{counts = Association[]},
-	Map[
-		Function[variables,
-			Association[
-				Map[
-					Function[name,
-						counts[name] = Lookup[counts,name,0]+1;
-						name -> counts[name]
-					],
-					Lookup[variables,"Name",{}]
-				]
-			]
-		],
-		variableLists
-	]
-];
-
-(* What the rewrite needs about a bound symbol: its log name, its context (to check tracking) and the symbol, held *)
-variableInfo[symbol_Symbol]:=Association[
-	"Name" -> normalizeName[symbolString[symbol]],
-	"Context" -> symbolContext[symbol],
-	"Held" -> HoldComplete[symbol]
 ];
 
 (* The symbols a Set, Function or With node binds *)
@@ -966,108 +847,88 @@ heldVariables[HoldComplete[Verbatim[Function][symbols:{__Symbol},__]]]:=Cases[Ho
 heldVariables[HoldComplete[Verbatim[With][variables_List,_]]]:=Cases[HoldComplete[variables],Verbatim[Set][symbol_Symbol,_] :> variableInfo[symbol],{2}];
 heldVariables[_]:={};
 
-(* Sequence patterns (x__, opts:OptionsPattern[]) are logged as a list of what they matched *)
-sequencePatternQ[(Verbatim[PatternTest]|Verbatim[Condition])[pattern_,_]]:=sequencePatternQ[pattern];
-sequencePatternQ[_BlankSequence|_BlankNullSequence|_OptionsPattern|_Repeated|_RepeatedNull]:=True;
-sequencePatternQ[_]:=False;
+$mutationHeads = Set|AddTo|SubtractFrom|TimesBy|DivideBy|Increment|Decrement|PreIncrement|PreDecrement|AssociateTo|KeyDropFrom|AppendTo|PrependTo;
 
-(* A body ending in Condition (through Module/Block/With) is the "value /; test" idiom: log inside the Condition *)
-conditionTailQ[HoldComplete[Verbatim[Condition][_,_]]]:=True;
-conditionTailQ[HoldComplete[(Module|Block|With|withPH)[_,body_]]]:=conditionTailQ[HoldComplete[body]];
-conditionTailQ[_]:=False;
+(* The variable a mutation node changes, or None. Set with a plain symbol on the left is an ordinary Set, not a mutation. *)
+mutationInfo[HoldComplete[Verbatim[Set][target_,_]]]:=mutationBase[HoldComplete[target],False];
+mutationInfo[HoldComplete[_[target_,___]]]:=mutationBase[HoldComplete[target],True];
+mutationInfo[_]:=None;
 
-(* Puts log first in body, or first inside its trailing Condition *)
-injectHeld[HoldComplete[Verbatim[Condition][value_,test_]],HoldComplete[log_]]:=HoldComplete[Condition[CompoundExpression[log,value],test]];
-injectHeld[HoldComplete[(head:(Module|Block|With|withPH))[variables_,body_]],log_HoldComplete]/;conditionTailQ[HoldComplete[body]]:=Replace[
-	injectHeld[HoldComplete[body],log],
-	HoldComplete[newBody_] :> HoldComplete[head[variables,newBody]]
-];
-injectHeld[HoldComplete[body_],HoldComplete[log_]]:=HoldComplete[CompoundExpression[log,body]];
-
-
-(* ::Subsection::Closed:: *)
-(*Runtime logging*)
-
-
-(* Called from rewritten code: one AssignmentLog entry per input, all tagged with the same call *)
-SetAttributes[logInputs,HoldAll];
-logInputs[tagId_Integer,names_List,HoldComplete[values___]]:=With[
-	{time = UnixTime[],heldValues = Apply[List,Map[Hold,HoldComplete[values]]]},
-	Sow[callMarker[tagId],"assignment"];
-	If[Length[heldValues] === Length[names],
-		MapThread[
-			Sow[{time,#1,#2,DebuggerLocation[tagId]},"assignment"]&,
-			{names,heldValues}
-		]
-	];
-];
-logInputs[___]:=Null;
-
-(* A mutation the set handler does not report (+=, ++, AssociateTo, ...): log the variable's new value; return the mutation's own result *)
-SetAttributes[logMutation,SequenceHold];
-logMutation[tagId_Integer,name_String,result_,newValue_]:=(
-	Sow[{UnixTime[],name,Hold[newValue],DebuggerLocation[tagId]},"assignment"];
-	result
-);
-
-(* A Module/Block initializer's value, logged as a complete entry since the set handler does not report it *)
-SetAttributes[logAssigned,SequenceHold];
-logAssigned[tagId_Integer,name_String,value_]:=(
-	Sow[{UnixTime[],name,Hold[value],DebuggerLocation[tagId]},"assignment"];
-	value
-);
+(* mutationBase[target, plainSymbolQ]: the variable that target (x, x[[i]] or x[key]) changes; a bare x counts only when plainSymbolQ *)
+mutationBase[HoldComplete[symbol_Symbol],True]:=variableInfo[symbol];
+mutationBase[HoldComplete[Verbatim[Part][symbol_Symbol,___]],_]:=variableInfo[symbol];
+(* symbol[key]: a variable holding an Association, never a function (a symbol with definitions, e.g. memoization) *)
+mutationBase[HoldComplete[(symbol:Except[List|Part,_Symbol])[___]],_]/;DownValues[symbol] === {}:=variableInfo[symbol];
+mutationBase[___]:=None;
 
 (*
-	Turns the raw Sow stream into AssignmentLog entries. A Set marker is Sown before its value is computed,
-	so markers are kept as a stack per variable: an assignment takes the newest pending marker for its name,
-	which pairs nested assignments of the same name (x = f[], with x = ... inside f) innermost first.
+	Which node of the rule made an entry: the nodes of the entry's kind binding the variable, in source order, and the
+	one whose form matches what the run showed. Its position among them is the ordinal of its line among the textual
+	matches of the variable in the overload; Missing when no single node matches.
 *)
-pairLocations[items_List]:=Module[
-	{pending = Association[],call = 0,paired},
-
-	paired = Reap[
-		Scan[
-			Function[item,
-				Switch[item,
-					setMarker[_Integer],
-						Scan[
-							Function[variable,
-								pending[variable] = Prepend[Lookup[pending,variable,{}],First[item]]
-							],
-							Lookup[Lookup[$locationTags,First[item],Association[]],"Variables",{}]
-						],
-					callMarker[_Integer],
-						call = call+1,
-					{_,_String,_Hold,_DebuggerLocation},
-						Sow[ReplacePart[item,4 -> DebuggerLocation[First[Last[item]],call]],"paired"],
-					{_,_String,_Hold},
-						Sow[Append[item,popLocation[pending,baseName[item[[2]]]]],"paired"]
-				]
+siteOrdinal[rule_HoldComplete,kind_String,variable_String,observed_HoldComplete]:=Module[
+	{rhsQ,sites,matching},
+	rhsQ = MatchQ[#,{1,2,___}]&;
+	sites = Switch[kind,
+		"Set"|"With",
+			Select[
+				preOrder[Select[Position[rule,Verbatim[Set][_Symbol|{__Symbol},_]],rhsQ]],
+				MemberQ[Lookup[heldVariables[Extract[rule,#,HoldComplete]],"Name"],variable]&
 			],
-			items
-		],
-		"paired"
-	][[2]];
-
-	Replace[paired,{{entries_List} :> entries,_ -> {}}]
+		"Mutation",
+			Select[
+				preOrder[Select[Position[rule,$mutationHeads[_,___]],rhsQ]],
+				With[{info = mutationInfo[Extract[rule,#,HoldComplete]]},And[AssociationQ[info],info["Name"] === variable]]&
+			],
+		"Function",
+			Select[
+				preOrder[Select[Position[rule,Verbatim[Function][Except[Null,_Symbol]|{__Symbol},__]],rhsQ]],
+				MemberQ[Lookup[heldVariables[Extract[rule,#,HoldComplete]],"Name"],variable]&
+			],
+		_,
+			{}
+	];
+	(* A With constant is matched by its With node, two levels above its initializer *)
+	matching = Select[
+		Range[Length[sites]],
+		siteMatchQ[observed,Extract[rule,If[kind === "With",Drop[sites[[#]],-2],sites[[#]]],HoldComplete]]&
+	];
+	Which[
+		Length[matching] === 1,First[matching],
+		Length[sites] === 1,1,
+		True,Missing["Ambiguous"]
+	]
 ];
+siteOrdinal[___]:=Missing["Ambiguous"];
 
-(* Takes the newest pending marker for a variable *)
-SetAttributes[popLocation,HoldFirst];
-popLocation[pending_,variable_String]:=With[
-	{ids = Lookup[pending,variable,{}]},
-	If[ids === {},
-		Missing["NotInstrumented"],
-		pending[variable] = Rest[ids];
-		DebuggerLocation[First[ids]]
+(*
+	The node as a pattern: local symbols (renamed Module variables and substituted inputs at run time) match any one
+	expression, also as a head as in assoc["k"], and any pattern syntax written in the code is made literal
+*)
+$patternConstructs = Blank|BlankSequence|BlankNullSequence|Pattern|Condition|PatternTest|Alternatives|Repeated|RepeatedNull|Optional|Except|Verbatim|HoldPattern|OptionsPattern|PatternSequence|Longest|Shortest|KeyValuePattern;
+
+siteMatchQ[observed_HoldComplete,node_HoldComplete]:=Quiet[
+	MatchQ[
+		observed,
+		ReplaceAll[
+			ReplaceAll[node,construct:$patternConstructs :> Verbatim[construct]],
+			symbol_Symbol/;localSymbolQ[symbol] :> Blank[]
+		]
 	]
 ];
 
-(* Shown in the log as <<function Kind>> *)
-Format[DebuggerLocation[id_Integer,___]]:=With[
-	{tag = Lookup[$locationTags,id,Association[]]},
-	Row[{"\[LeftSkeleton]",shortName[Lookup[tag,"Function","?"]]," ",Lookup[tag,"Kind",""],"\[RightSkeleton]"}]
+(* A symbol with no definitions and no value outside the system: a variable or input as written, never a function *)
+SetAttributes[localSymbolQ,HoldAll];
+localSymbolQ[symbol_Symbol]:=And[
+	!StringStartsQ[Context[symbol],"System`"],
+	DownValues[symbol] === {},
+	OwnValues[symbol] === {},
+	SubValues[symbol] === {}
 ];
+
+(* The short names of the pattern variables on a rule's left-hand side, used to pick its overload in the source *)
+rulePatternNames[rule_HoldComplete]:=DeleteDuplicates[Map[shortName,Lookup[patternInfo[rule],"Name",{}]]];
+rulePatternNames[_]:={};
 
 
 (* ::Section::Closed:: *)
@@ -1290,31 +1151,25 @@ sourceLine[{file_String,line_Integer}]:=With[
 
 
 (*
-	File, line and code for one log entry: find the function's source blocks, pick the overload by pattern names,
-	then take the textual match of the variable whose position matches the node's ordinal in the rule.
+	File, line and code for one log entry: find the function's source blocks, pick the overload by the pattern names of
+	the rule that ran, then find which node of that rule made the entry and take the textual match at its ordinal.
 *)
-resolveLocation[DebuggerLocation[id_Integer,call___Integer],variableName_String]:=Module[
-	{tag,kind,variable,base,blocks,chosen,matches,ordinal,location},
+resolveLocation[DebuggerLocation[function_String,kind_String,rule_,observed_,call_],variableName_String]:=Module[
+	{variable,base,blocks,chosen,matches,ordinal,location},
 
-	tag = Lookup[$locationTags,id,Missing["UnknownTag"]];
-	If[MissingQ[tag],
-		Return[Association["Function" -> tag,"File" -> tag,"Line" -> tag]]
-	];
-
-	kind = tag["Kind"];
 	variable = baseName[variableName];
 	base = Join[
-		Association["Function" -> tag["Function"],"Kind" -> kind],
-		If[{call} === {},Association[],Association["Call" -> call]]
+		Association["Function" -> function,"Kind" -> kind],
+		If[IntegerQ[call],Association["Call" -> call],Association[]]
 	];
 
-	blocks = sourceBlocks[tag["Function"]];
+	blocks = sourceBlocks[function];
 	If[blocks === {},
 		Return[Join[base,Association["File" -> Missing["SourceNotFound"],"Line" -> Missing["SourceNotFound"]]]]
 	];
 
-	chosen = chooseOverloads[blocks,tag["PatternNames"]];
-	ordinal = Lookup[tag["Ordinals"],variable,Missing[]];
+	chosen = chooseOverloads[blocks,rulePatternNames[rule]];
+	ordinal = If[kind === "Pattern",Missing[],siteOrdinal[rule,kind,variable,observed]];
 	matches = Switch[kind,
 		"Pattern", Map[{#["File"],#["Start"]}&,chosen],
 		"Function", Flatten[Map[blockMatches[#,functionRegex[shortName[variable]]]&,chosen],1],
@@ -1343,6 +1198,12 @@ resolveLocation[DebuggerLocation[id_Integer,call___Integer],variableName_String]
 			"Candidates" -> matches
 		]
 	]
+];
+resolveLocation[DebuggerLocation[None,kind_String,___],_]:=Association[
+	"Function" -> Missing["NotInTrackedFunction"],
+	"Kind" -> kind,
+	"File" -> Missing["NotInTrackedFunction"],
+	"Line" -> Missing["NotInTrackedFunction"]
 ];
 resolveLocation[missing_,_]:=Association["Function" -> missing,"File" -> missing,"Line" -> missing];
 
@@ -1493,16 +1354,9 @@ functionNameMatchQ[name_String,query_String]:=Or[
 	And[StringFreeQ[query,"`"],shortName[name] === query]
 ];
 
-inputEntryQ[entry_List,function_String]:=And[
-	Length[entry] >= 4,
-	MatchQ[entry[[4]],DebuggerLocation[_Integer,_Integer]],
-	With[
-		{tag = Lookup[$locationTags,entry[[4,1]],Association[]]},
-		And[
-			Lookup[tag,"Kind",None] === "Pattern",
-			functionNameMatchQ[Lookup[tag,"Function",""],function]
-		]
-	]
+inputEntryQ[entry_List,function_String]:=MatchQ[
+	entry,
+	{_,_,_,DebuggerLocation[name_String,"Pattern",_,_,_Integer]}/;functionNameMatchQ[name,function]
 ];
 
 DebuggerInputs[function_String]:=With[
@@ -1510,7 +1364,7 @@ DebuggerInputs[function_String]:=With[
 	Values[
 		GroupBy[
 			entries,
-			(#[[4,2]]&) -> (shortName[#[[2]]] -> ReleaseHold[#[[3]]]&),
+			(#[[4,5]]&) -> (shortName[#[[2]]] -> ReleaseHold[#[[3]]]&),
 			Association
 		]
 	]

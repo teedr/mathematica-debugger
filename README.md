@@ -69,25 +69,25 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 * Use the `TrackLocations` option to record where each tracked assignment happened (function, file and line)
 	> Defaults to `TrackLocations -> True`
 
-* Use the `InstrumentSymbols` option to limit which functions are rewritten for `TrackInputs`/`TrackLocations`
-	> Defaults to `InstrumentSymbols -> Automatic`: every function in `DebuggerContexts` plus the public functions of those packages
+* Use the `TrackedFunctions` option to limit which functions' calls are tracked (inputs logged, assignments attributed to them)
+	> Defaults to `TrackedFunctions -> Automatic`: every function in `DebuggerContexts` plus the public functions of those packages
 
-Turn them off with `SetOptions`, e.g. `SetOptions[Debugger, TrackInputs -> False, TrackLocations -> False]`, to get the plain assignment log without rewriting any function.
+Turn them off with `SetOptions`, e.g. `SetOptions[Debugger, TrackInputs -> False, TrackLocations -> False]`, to get the plain assignment log from `WithSetHandler` alone.
 
 ### Inputs and locations
 
-With `TrackInputs`/`TrackLocations` on, every function under debug is rewritten the first time it is called inside `Debugger` (pattern inputs are logged from a `Condition` around the rule's left-hand side, `Function`/`With` bodies log their values first, and every `Set` value is prefixed with a marker). The rewrite lives in an `Internal`InheritedBlock`, so the original definitions are back as soon as `Debugger` returns; rewrites are cached until a function's definitions change. `ClearDebuggerCache[]` drops the cache.
+With `TrackInputs`/`TrackLocations` on, the run is observed with `TraceScan` and no definition is changed. Each evaluation step is seen before and after it runs, so the Debugger knows which tracked function is running and logs, as they happen, a tracked function's inputs when its definition applies (the call is matched against its `DownValues`, read only), `Function` parameters and `With` constants as they are bound, and every `Set`, part/key assignment and mutation, tagged with the function it ran in.
 
 * `DebuggerWhere[]` — function, file, line and code of the last tracked assignment (after a message: where you actually were)
 * `DebuggerWhere[n]` — the same for entry `n` of the AssignmentLog (negative `n` counts from the end)
 * `DebuggerWhere["var"]` — every assignment of `var`, each with its location (the context may be omitted)
 * `DebuggerHistory[n]` — table of the last `n` assignments with function and `file:line`; `DebuggerHistory["var"]` is the same table for every assignment of `var`
-* Aborting a run (`Abort[]`, Alt+.) restores the original definitions the same way a normal return does
+* Aborting a run (`Abort[]`, Alt+.) keeps the log of everything up to the abort and prints where the run was
 * `DebuggerInputs[f]` — the pattern inputs of every call to `f`, one association per call
 * When a message aborts a run with `TrackLocations -> True`, the last tracked assignment is printed
-* Assignments into part of a variable (`x[[i]] = v`, `assoc["k"] = v`) are logged as `x[[i]]` / `assoc["k"]` in every run. With tracking on, `+=`, `-=`, `*=`, `/=`, `++`, `--`, `AssociateTo` and `KeyDropFrom`, which `WithSetHandler` never reports, log the variable's new value, and all of these get locations
+* Assignments into part of a variable (`x[[i]] = v`, `assoc["k"] = v`) are logged as `x[[i]]` / `assoc["k"]` in every run. With tracking on, `+=`, `-=`, `*=`, `/=`, `++`, `--`, `AppendTo`, `AssociateTo`, `KeyDropFrom` and `Module`/`Block` initializers are logged too (the variable's new value), and all of these get locations
 
-Locations are found by matching the rewritten rule back to its source text: the overload is chosen by its pattern names, and the n-th `x = ...` in that overload is the n-th `Set` of `x` in the rule. `$DebuggerSourceFiles` says where to look:
+Locations are worked out when asked for, from the definition (rule) that ran and the assignment as the run showed it: the overload is chosen by the rule's pattern names, the assignment is matched against the rule's `Set`s of that variable (local variables and inputs match anything), and the n-th `x = ...` in that overload is the n-th `Set` of `x` in the rule. When two assignments look the same, the candidates are listed instead. `$DebuggerSourceFiles` says where to look:
 
 * `Automatic` (default): asks Packager (`FunctionPackage`/`PackageSources`) when it is loaded, otherwise nothing is found
 * a list of files, or a function from a function's full name to its files
@@ -260,11 +260,10 @@ TestReport[FileNameJoin[{$HomeDirectory, "mathematica-debugger", "Tests", "Debug
 ## Known Issues
 * There is an issue where an `Unset::write` error is thrown from the Debugger after aborting from a message. It doesn't seem to affect any functionality but tracking down the error's source is ongoing.
 * The log is collected with `Sow`, so code under debug that calls `Reap[expr]` without a tag pattern also reaps the Debugger's entries (and returns them to that code).
-* `TrackInputs`/`TrackLocations` cost time: the first call of each function rewrites it, and every call logs its inputs. Narrow it with `InstrumentSymbols` when a run is too slow.
-* `Function` objects created during a tracked run carry their logging call; if one is returned or stored, it still runs correctly but logs nothing outside `Debugger`.
+* `TrackInputs`/`TrackLocations` observe every evaluation step with `TraceScan`, which costs kernel time (about 2 s of CPU on a 14 s `ExperimentNMR` call, most of whose time is spent waiting on Constellation). Narrow it with `TrackedFunctions`, or turn tracking off, when a run is too slow.
 * Locations come from the source files on disk; if a file was edited without reloading, lines can be off.
-* `WithSetHandler` does not report `Module[{a = 1}, ...]` initializers, so untracked runs never log them; with `TrackInputs` or `TrackLocations` on, rewritten functions log their initializers themselves.
-* On Mathematica 14.2 `WithSetHandler` reports every `Set` twice. Identical back-to-back reports of the same runtime symbol are collapsed into one entry.
+* `WithSetHandler` does not report `Module[{a = 1}, ...]` initializers, so untracked runs never log them; tracked runs do.
+* On Mathematica 14.2 `WithSetHandler` reports every `Set` twice in untracked runs. Identical back-to-back reports of the same runtime symbol are collapsed into one entry.
 
 ## Contributing
 

@@ -83,10 +83,18 @@ VerificationTest[
 ]
 
 VerificationTest[
-	Debugger[Fixture`fixtureOuter[3], $fixtureOptions, InstrumentSymbols -> {Fixture`fixtureInner}];
+	With[{definitions = DownValues[Fixture`fixtureOuter]},
+		Debugger[DownValues[Fixture`fixtureOuter] === definitions, $fixtureOptions]
+	],
+	True,
+	TestID -> "Definitions are unchanged while a tracked run is in progress"
+]
+
+VerificationTest[
+	Debugger[Fixture`fixtureOuter[3], $fixtureOptions, TrackedFunctions -> {Fixture`fixtureInner}];
 	KeyExistsQ[DebuggerInformation["CurrentAssignments"], #]& /@ {"Fixture`x", "Fixture`y"},
 	{False, True},
-	TestID -> "InstrumentSymbols restricts the rewritten functions"
+	TestID -> "TrackedFunctions restricts which functions' inputs are logged"
 ]
 
 VerificationTest[
@@ -211,9 +219,9 @@ VerificationTest[
 ]
 
 VerificationTest[
-	Block[{Debugger`Private`instrumentationCandidates},
+	Block[{Debugger`Private`trackingSetup},
 		(* abort while choosing which functions to instrument, before the code under test runs *)
-		Debugger`Private`instrumentationCandidates[___] := Abort[];
+		Debugger`Private`trackingSetup[___] := Abort[];
 		{
 			CheckAbort[Debugger[Fixture`fixtureOuter[3], $fixtureOptions], "aborted"],
 			AssociationQ[DebuggerInformation],
