@@ -31,13 +31,16 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 
 * After execution, the symbol `DebuggerInformation` will be populated with keys: 
 	* _"AssignmentLog"_
-		* List of timestamped assignments (in order of assignment) for each variable assigned during execution
+		* List of `{time, variable, Hold[value], location}` entries (in order of assignment) for each variable assigned during execution
+		* `location` is a `DebuggerLocation[...]` tag when `TrackInputs`/`TrackLocations` are on, otherwise `Missing[...]`
 	* _"CurrentAssignments"_
 		* Association mapping each assigned variable to its current value
 	* _"LastAssignment"_
 		* The last variable name set during execution
 	* _"Failures"_
 		* A list of any messages represented by `Failure` objects
+	* _"MessageStacks"_
+		* `Stack[]` at the moment each message was issued
 
 
 * All variables in _DebuggerInformation_ Associations will be ToString-ed and include Context
@@ -55,6 +58,41 @@ This package provides an implementation of a debugger for Wolfram's _Mathematica
 	
 * Use the `ModuleNumbers` option to toggle module number suffix on variable names
 	> Defaults to `ModuleNumbers -> False`
+
+* Use the `TrackInputs` option to also log values that are bound without `Set`
+	> Defaults to `TrackInputs -> True`
+	* Function pattern inputs: `mySamples` in `ExperimentFoo[mySamples:ListableP[...], myOptions:OptionsPattern[]] := ...`
+	* `Function` parameters: `element` in `Map[Function[{element}, ...], list]`
+	* `With` constants: `doubled` in `With[{doubled = 2 a}, ...]`
+	* Sequence patterns (`x__`, `opts:OptionsPattern[]`) are logged as a list of what they matched; inputs of `HoldAll` functions are logged unevaluated
+
+* Use the `TrackLocations` option to record where each tracked assignment happened (function, file and line)
+	> Defaults to `TrackLocations -> True`
+
+* Use the `TrackedFunctions` option to limit which functions' calls are tracked (inputs logged, assignments attributed to them)
+	> Defaults to `TrackedFunctions -> Automatic`: every function in `DebuggerContexts` plus the public functions of those packages
+
+Turn them off with `SetOptions`, e.g. `SetOptions[Debugger, TrackInputs -> False, TrackLocations -> False]`, to get the plain assignment log from `WithSetHandler` alone.
+
+### Inputs and locations
+
+With `TrackInputs`/`TrackLocations` on, the run is observed with `TraceScan` and no definition is changed. Each evaluation step is seen before and after it runs, so the Debugger knows which tracked function is running and logs, as they happen, a tracked function's inputs when its definition applies (the call is matched against its `DownValues`, read only), `Function` parameters and `With` constants as they are bound, and every `Set`, part/key assignment and mutation, tagged with the function it ran in.
+
+* `DebuggerWhere[]` — function, file, line and code of the last tracked assignment (after a message: where you actually were)
+* `DebuggerWhere[n]` — the same for entry `n` of the AssignmentLog (negative `n` counts from the end)
+* `DebuggerWhere["var"]` — every assignment of `var`, each with its location (the context may be omitted)
+* `DebuggerHistory[n]` — table of the last `n` assignments with function and `file:line`; `DebuggerHistory["var"]` is the same table for every assignment of `var`
+* Aborting a run (`Abort[]`, Alt+.) keeps the log of everything up to the abort and prints where the run was
+* `DebuggerInputs[f]` — the pattern inputs of every call to `f`, one association per call
+* When a message aborts a run with `TrackLocations -> True`, the last tracked assignment is printed
+* Assignments into part of a variable (`x[[i]] = v`, `assoc["k"] = v`) are logged as `x[[i]]` / `assoc["k"]` in every run. With tracking on, `+=`, `-=`, `*=`, `/=`, `++`, `--`, `AppendTo`, `AssociateTo`, `KeyDropFrom` and `Module`/`Block` initializers are logged too (the variable's new value), and all of these get locations
+
+Locations are worked out when asked for, from the definition (rule) that ran and the assignment as the run showed it: the overload is chosen by the rule's pattern names, the assignment is matched against the rule's `Set`s of that variable (local variables and inputs match anything), and the n-th `x = ...` in that overload is the n-th `Set` of `x` in the rule. When two assignments look the same, the candidates are listed instead. `$DebuggerSourceFiles` says where to look:
+
+* `Automatic` (default): asks Packager (`FunctionPackage`/`PackageSources`) when it is loaded, otherwise nothing is found
+* a list of files, or a function from a function's full name to its files
+
+Set `$DebuggerLinkTemplate` to a `StringTemplate` string with `File` and `Line` slots, e.g. ``"vscode://file/`File`:`Line`"``, to make locations clickable.
 
 ### Breakpoints
 
@@ -213,15 +251,25 @@ In[1]:= Debugger[func[3], BreakOnAssert -> True]
 Out[1]= {7, 4}
 ```
 
+## Tests
+
+```
+TestReport[FileNameJoin[{$HomeDirectory, "mathematica-debugger", "Tests", "DebuggerTests.wlt"}]]
+```
+
 ## Known Issues
 * There is an issue where an `Unset::write` error is thrown from the Debugger after aborting from a message. It doesn't seem to affect any functionality but tracking down the error's source is ongoing.
+* The log is collected with `Sow`, so code under debug that calls `Reap[expr]` without a tag pattern also reaps the Debugger's entries (and returns them to that code).
+* `TrackInputs`/`TrackLocations` observe every evaluation step with `TraceScan`, which costs kernel time (about 2 s of CPU on a 14 s `ExperimentNMR` call, most of whose time is spent waiting on Constellation). Narrow it with `TrackedFunctions`, or turn tracking off, when a run is too slow.
+* Locations come from the source files on disk; if a file was edited without reloading, lines can be off.
+* `WithSetHandler` does not report `Module[{a = 1}, ...]` initializers, so untracked runs never log them; tracked runs do.
+* On Mathematica 14.2 `WithSetHandler` reports every `Set` twice in untracked runs. Identical back-to-back reports of the same runtime symbol are collapsed into one entry.
 
 ## Contributing
 
 Please! Fork this repository and open a pull request. Some potential future developments include:
 
-* Log SetDelayed calls / Log function calls
-* Log what function was responsible for an assignment
+* Log SetDelayed calls
 * Figure out some way to populate `DebuggerInformation` upon `Assert[False]` without compromising Reap/Sow performance
 * Perhaps some sort of Debugger dialog
 * More stuff I can't think of
